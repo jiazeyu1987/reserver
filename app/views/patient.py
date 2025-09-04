@@ -18,15 +18,35 @@ def create_family():
     """创建家庭档案"""
     try:
         data = request.get_json()
-        recorder_id = int(get_jwt_identity())  # 获取当前用户ID
+        if not data:
+            return jsonify({
+                'code': 422,
+                'message': '请求数据不能为空'
+            }), 422
+            
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         
         # 验证请求数据
         validation_error = validate_family_data(data)
         if validation_error:
             return jsonify({
-                'code': 400,
+                'code': 422,
                 'message': validation_error
-            }), 400
+            }), 422
         
         family = FamilyService.create_family(data, recorder_id)  # 传入recorder_id
         
@@ -49,7 +69,22 @@ def create_family():
 def get_families():
     """获取家庭列表"""
     try:
-        recorder_id = int(get_jwt_identity())
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
+            
         page = request.args.get('page', 1, type=int)
         limit = request.args.get('limit', 20, type=int)
         search = request.args.get('search', '')
@@ -65,7 +100,7 @@ def get_families():
         current_app.logger.error(f"获取家庭列表失败: {str(e)}")
         return jsonify({
             'code': 500,
-            'message': '服务器内部错误'
+            'message': f'服务器内部错误: {str(e)}'
         }), 500
 
 @patient_bp.route('/families/<int:family_id>', methods=['GET'])
@@ -74,7 +109,22 @@ def get_families():
 def get_family_detail(family_id):
     """获取家庭详情"""
     try:
-        recorder_id = int(get_jwt_identity())
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
+            
         result = FamilyService.get_family_by_id(family_id, recorder_id)
         
         if not result:
@@ -102,15 +152,35 @@ def update_family(family_id):
     """更新家庭信息"""
     try:
         data = request.get_json()
-        recorder_id = int(get_jwt_identity())
+        if not data:
+            return jsonify({
+                'code': 422,
+                'message': '请求数据不能为空'
+            }), 422
+            
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         
         # 验证请求数据
         validation_error = validate_family_data(data, is_update=True)
         if validation_error:
             return jsonify({
-                'code': 400,
+                'code': 422,
                 'message': validation_error
-            }), 400
+            }), 422
         
         family = FamilyService.update_family(family_id, data, recorder_id)
         
@@ -139,7 +209,21 @@ def update_family(family_id):
 def delete_family(family_id):
     """删除家庭档案"""
     try:
-        recorder_id = int(get_jwt_identity())
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         success = FamilyService.delete_family(family_id, recorder_id)
         
         if not success:
@@ -169,15 +253,35 @@ def add_family_member(family_id):
     """为家庭添加新成员"""
     try:
         data = request.get_json()
-        recorder_id = int(get_jwt_identity())
+        if not data:
+            return jsonify({
+                'code': 422,
+                'message': '请求数据不能为空'
+            }), 422
+            
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         
         # 验证请求数据
         validation_error = validate_patient_data(data)
         if validation_error:
             return jsonify({
-                'code': 400,
+                'code': 422,
                 'message': validation_error
-            }), 400
+            }), 422
         
         patient = FamilyService.add_family_member(family_id, data, recorder_id)
         
@@ -207,15 +311,35 @@ def update_family_member(family_id, member_id):
     """更新家庭成员信息"""
     try:
         data = request.get_json()
-        recorder_id = int(get_jwt_identity())
+        if not data:
+            return jsonify({
+                'code': 422,
+                'message': '请求数据不能为空'
+            }), 422
+            
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         
         # 验证请求数据
         validation_error = validate_patient_data(data, is_update=True)
         if validation_error:
             return jsonify({
-                'code': 400,
+                'code': 422,
                 'message': validation_error
-            }), 400
+            }), 422
         
         patient = FamilyService.update_family_member(family_id, member_id, data, recorder_id)
         
@@ -244,7 +368,21 @@ def update_family_member(family_id, member_id):
 def delete_family_member(family_id, member_id):
     """删除家庭成员"""
     try:
-        recorder_id = int(get_jwt_identity())
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         success = FamilyService.delete_family_member(family_id, member_id, recorder_id)
         
         if not success:
@@ -279,7 +417,21 @@ def delete_family_member(family_id, member_id):
 def create_health_record():
     """创建健康记录"""
     try:
-        recorder_id = int(get_jwt_identity())
+        # 获取当前用户ID并验证
+        current_user_identity = get_jwt_identity()
+        if not current_user_identity:
+            return jsonify({
+                'code': 422,
+                'message': 'JWT token无效'
+            }), 422
+            
+        try:
+            recorder_id = int(current_user_identity)
+        except (ValueError, TypeError):
+            return jsonify({
+                'code': 422,
+                'message': '用户ID格式错误'
+            }), 422
         
         # 验证请求数据
         validation_error = validate_health_record(request)

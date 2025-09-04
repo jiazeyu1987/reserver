@@ -60,18 +60,24 @@ class FamilyService:
                         package = ServicePackage(
                             name=patient.packageType,
                             price=0.00,
-                            duration_months=1,
+                            duration_days=30,
+                            service_frequency=4,
                             description=f'默认{patient.packageType}'
                         )
                         db.session.add(package)
                         db.session.flush()
                     
                     # 创建患者订阅记录
+                    from datetime import timedelta
+                    start_date = datetime.now().date()
+                    end_date = start_date + timedelta(days=package.duration_days)
+                    
                     subscription = PatientSubscription(
                         patient_id=patient.id,
                         package_id=package.id,
                         recorder_id=recorder_id,
-                        start_date=datetime.now().date(),
+                        start_date=start_date,
+                        end_date=end_date,
                         status='active'
                     )
                     db.session.add(subscription)
