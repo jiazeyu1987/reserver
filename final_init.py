@@ -72,6 +72,15 @@ def init_database():
         )
         db.session.add(admin)
         
+        admin2 = User(
+            username='admin2',
+            phone='13800138011',
+            password_hash=generate_password_hash('admin123'),
+            role='admin',
+            name='系统管理员2'
+        )
+        db.session.add(admin2)
+        
         # 创建记录员
         recorder_user = User(
             username='recorder001',
@@ -89,6 +98,57 @@ def init_database():
             is_on_duty=True
         )
         db.session.add(recorder)
+        
+        recorder_user2 = User(
+            username='recorder002',
+            phone='13800138007',
+            password_hash=generate_password_hash('recorder123'),
+            role='recorder',
+            name='记录员002'
+        )
+        db.session.add(recorder_user2)
+        db.session.flush()
+        
+        recorder2 = Recorder(
+            user_id=recorder_user2.id,
+            employee_id='EMP002',
+            is_on_duty=True
+        )
+        db.session.add(recorder2)
+        
+        recorder_user3 = User(
+            username='recorder003',
+            phone='13800138008',
+            password_hash=generate_password_hash('recorder123'),
+            role='recorder',
+            name='记录员003'
+        )
+        db.session.add(recorder_user3)
+        db.session.flush()
+        
+        recorder3 = Recorder(
+            user_id=recorder_user3.id,
+            employee_id='EMP003',
+            is_on_duty=True
+        )
+        db.session.add(recorder3)
+        
+        recorder_user4 = User(
+            username='recorder004',
+            phone='13800138012',
+            password_hash=generate_password_hash('recorder123'),
+            role='recorder',
+            name='记录员004'
+        )
+        db.session.add(recorder_user4)
+        db.session.flush()
+        
+        recorder4 = Recorder(
+            user_id=recorder_user4.id,
+            employee_id='EMP004',
+            is_on_duty=True
+        )
+        db.session.add(recorder4)
         
         # 创建医生
         doctor_user = User(
@@ -110,6 +170,69 @@ def init_database():
             title='主治医师'
         )
         db.session.add(doctor)
+        db.session.flush()
+        
+        doctor_user2 = User(
+            username='doctor002',
+            phone='13800138009',
+            password_hash=generate_password_hash('doctor123'),
+            role='doctor',
+            name='医生002'
+        )
+        db.session.add(doctor_user2)
+        db.session.flush()
+        
+        doctor2 = Doctor(
+            user_id=doctor_user2.id,
+            license_number='DOC002',
+            specialty='外科',
+            hospital='协和医院',
+            department='普外科',
+            title='副主任医师'
+        )
+        db.session.add(doctor2)
+        db.session.flush()
+        
+        doctor_user3 = User(
+            username='doctor003',
+            phone='13800138010',
+            password_hash=generate_password_hash('doctor123'),
+            role='doctor',
+            name='医生003'
+        )
+        db.session.add(doctor_user3)
+        db.session.flush()
+        
+        doctor3 = Doctor(
+            user_id=doctor_user3.id,
+            license_number='DOC003',
+            specialty='儿科',
+            hospital='儿童医院',
+            department='儿科',
+            title='主任医师'
+        )
+        db.session.add(doctor3)
+        db.session.flush()
+        
+        doctor_user4 = User(
+            username='doctor004',
+            phone='13800138013',
+            password_hash=generate_password_hash('doctor123'),
+            role='doctor',
+            name='医生004'
+        )
+        db.session.add(doctor_user4)
+        db.session.flush()
+        
+        doctor4 = Doctor(
+            user_id=doctor_user4.id,
+            license_number='DOC004',
+            specialty='妇产科',
+            hospital='妇产医院',
+            department='妇产科',
+            title='主治医师'
+        )
+        db.session.add(doctor4)
         db.session.flush()
         
         # 创建测试家庭和患者
@@ -224,8 +347,15 @@ def init_database():
             print("数据库初始化完成！")
             print("\n登录信息：")
             print("管理员: admin / admin123")
+            print("管理员: admin2 / admin123")
             print("记录员: recorder001 / recorder123")
+            print("记录员: recorder002 / recorder123")
+            print("记录员: recorder003 / recorder123")
+            print("记录员: recorder004 / recorder123")
             print("医生: doctor001 / doctor123")
+            print("医生: doctor002 / doctor123")
+            print("医生: doctor003 / doctor123")
+            print("医生: doctor004 / doctor123")
         except Exception as e:
             db.session.rollback()
             print(f"数据库初始化失败: {e}")

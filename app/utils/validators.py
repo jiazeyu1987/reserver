@@ -24,6 +24,84 @@ def validate_health_record(request):
     
     return None
 
+def validate_family_data(data, is_update=False):
+    """验证家庭数据"""
+    if not data:
+        return '请求数据不能为空'
+    
+    # 创建时的必填字段
+    if not is_update:
+        required_fields = ['householdHead', 'address', 'phone', 'members']
+        
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return f'缺少必填字段: {field}'
+        
+        # 验证家庭成员数据
+        members = data.get('members', [])
+        if not isinstance(members, list) or len(members) == 0:
+            return '至少需要一个家庭成员'
+        
+        for i, member in enumerate(members):
+            member_error = validate_patient_data(member, is_member=True)
+            if member_error:
+                return f'第{i+1}个成员数据错误: {member_error}'
+    
+    # 验证手机号格式（如果提供了）
+    if 'phone' in data and data['phone']:
+        phone = data['phone'].replace(' ', '').replace('-', '')
+        if not phone.isdigit() or len(phone) != 11:
+            return '手机号格式错误，应为11位数字'
+    
+    return None
+
+def validate_patient_data(data, is_update=False, is_member=False):
+    """验证患者/家庭成员数据"""
+    if not data:
+        return '成员数据不能为空'
+    
+    # 创建时的必填字段
+    if not is_update:
+        required_fields = ['name', 'age', 'gender', 'relationship']
+        
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return f'缺少必填字段: {field}'
+    
+    # 验证年龄
+    if 'age' in data:
+        try:
+            age = int(data['age'])
+            if age < 0 or age > 150:
+                return '年龄应在0-150之间'
+        except (ValueError, TypeError):
+            return '年龄必须是数字'
+    
+    # 验证性别
+    if 'gender' in data and data['gender']:
+        if data['gender'] not in ['男', '女']:
+            return '性别只能是"男"或"女"'
+    
+    # 验证套餐类型
+    if 'packageType' in data and data['packageType']:
+        valid_packages = ['基础套餐', '标准套餐', 'VIP套餐']
+        if data['packageType'] not in valid_packages:
+            return f'套餐类型必须是: {", ".join(valid_packages)}'
+    
+    # 验证支付状态
+    if 'paymentStatus' in data and data['paymentStatus']:
+        valid_statuses = ['normal', 'overdue', 'suspended']
+        if data['paymentStatus'] not in valid_statuses:
+            return f'支付状态必须是: {", ".join(valid_statuses)}'
+    
+    # 验证手机号格式（如果提供了）
+    if 'phone' in data and data['phone']:
+        phone = data['phone'].replace(' ', '').replace('-', '')
+        if not phone.isdigit() or len(phone) != 11:
+            return '手机号格式错误，应为11位数字'
+    
+    return None
+
 def validate_appointment(data):
     """验证预约数据"""
     required_fields = ['patient_id', 'scheduled_date', 'scheduled_time']

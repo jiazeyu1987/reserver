@@ -1,12 +1,47 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.patient_service import PatientService
-from app.utils.decorators import recorder_required
-from app.utils.validators import validate_health_record
+from app.services.family_service import FamilyService
+from app.utils.decorators import recorder_required, admin_or_recorder_required
+from app.utils.validators import validate_health_record, validate_family_data, validate_patient_data
 from app.utils.helpers import handle_file_upload
 import json
 
 patient_bp = Blueprint('patient', __name__, url_prefix='/api/v1')
+
+# ========== 家庭档案管理接口 ==========
+
+@patient_bp.route('/families', methods=['POST'])
+@jwt_required()
+@admin_or_recorder_required
+def create_family():
+    """创建家庭档案"""
+    try:
+        data = request.get_json()
+        recorder_id = int(get_jwt_identity())  # 获取当前用户ID
+        
+        # 验证请求数据
+        validation_error = validate_family_data(data)
+        if validation_error:
+            return jsonify({
+                'code': 400,
+                'message': validation_error
+            }), 400
+        
+        family = FamilyService.create_family(data, recorder_id)  # 传入recorder_id
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭档案创建成功',
+            'data': family.to_dict(include_members=True)
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"创建家庭档案失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
 
 @patient_bp.route('/families', methods=['GET'])
 @jwt_required()
@@ -19,7 +54,7 @@ def get_families():
         limit = request.args.get('limit', 20, type=int)
         search = request.args.get('search', '')
         
-        result = PatientService.get_recorder_families(recorder_id, page, limit, search)
+        result = FamilyService.get_families(recorder_id, page, limit, search)
         
         return jsonify({
             'code': 200,
@@ -40,7 +75,7 @@ def get_family_detail(family_id):
     """获取家庭详情"""
     try:
         recorder_id = int(get_jwt_identity())
-        result = PatientService.get_family_detail(family_id, recorder_id)
+        result = FamilyService.get_family_by_id(family_id, recorder_id)
         
         if not result:
             return jsonify({
@@ -59,6 +94,184 @@ def get_family_detail(family_id):
             'code': 500,
             'message': '服务器内部错误'
         }), 500
+
+@patient_bp.route('/families/<int:family_id>', methods=['PUT'])
+@jwt_required()
+@admin_or_recorder_required
+def update_family(family_id):
+    """更新家庭信息"""
+    try:
+        data = request.get_json()
+        recorder_id = int(get_jwt_identity())
+        
+        # 验证请求数据
+        validation_error = validate_family_data(data, is_update=True)
+        if validation_error:
+            return jsonify({
+                'code': 400,
+                'message': validation_error
+            }), 400
+        
+        family = FamilyService.update_family(family_id, data, recorder_id)
+        
+        if not family:
+            return jsonify({
+                'code': 404,
+                'message': '家庭不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭信息更新成功',
+            'data': family.to_dict(include_members=True)
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"更新家庭信息失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+@patient_bp.route('/families/<int:family_id>', methods=['DELETE'])
+@jwt_required()
+@admin_or_recorder_required
+def delete_family(family_id):
+    """删除家庭档案"""
+    try:
+        recorder_id = int(get_jwt_identity())
+        success = FamilyService.delete_family(family_id, recorder_id)
+        
+        if not success:
+            return jsonify({
+                'code': 404,
+                'message': '家庭不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭档案删除成功'
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"删除家庭档案失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+# ========== 家庭成员管理接口 ==========
+
+@patient_bp.route('/families/<int:family_id>/members', methods=['POST'])
+@jwt_required()
+@admin_or_recorder_required
+def add_family_member(family_id):
+    """为家庭添加新成员"""
+    try:
+        data = request.get_json()
+        recorder_id = int(get_jwt_identity())
+        
+        # 验证请求数据
+        validation_error = validate_patient_data(data)
+        if validation_error:
+            return jsonify({
+                'code': 400,
+                'message': validation_error
+            }), 400
+        
+        patient = FamilyService.add_family_member(family_id, data, recorder_id)
+        
+        if not patient:
+            return jsonify({
+                'code': 404,
+                'message': '家庭不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭成员添加成功',
+            'data': patient.to_dict()
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"添加家庭成员失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+@patient_bp.route('/families/<int:family_id>/members/<int:member_id>', methods=['PUT'])
+@jwt_required()
+@admin_or_recorder_required
+def update_family_member(family_id, member_id):
+    """更新家庭成员信息"""
+    try:
+        data = request.get_json()
+        recorder_id = int(get_jwt_identity())
+        
+        # 验证请求数据
+        validation_error = validate_patient_data(data, is_update=True)
+        if validation_error:
+            return jsonify({
+                'code': 400,
+                'message': validation_error
+            }), 400
+        
+        patient = FamilyService.update_family_member(family_id, member_id, data, recorder_id)
+        
+        if not patient:
+            return jsonify({
+                'code': 404,
+                'message': '家庭成员不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭成员信息更新成功',
+            'data': patient.to_dict()
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"更新家庭成员失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+@patient_bp.route('/families/<int:family_id>/members/<int:member_id>', methods=['DELETE'])
+@jwt_required()
+@admin_or_recorder_required
+def delete_family_member(family_id, member_id):
+    """删除家庭成员"""
+    try:
+        recorder_id = int(get_jwt_identity())
+        success = FamilyService.delete_family_member(family_id, member_id, recorder_id)
+        
+        if not success:
+            return jsonify({
+                'code': 404,
+                'message': '家庭成员不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '家庭成员删除成功'
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            'code': 400,
+            'message': str(e)
+        }), 400
+        
+    except Exception as e:
+        current_app.logger.error(f"删除家庭成员失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+# ========== 健康记录接口（保留原有功能） ==========
 
 @patient_bp.route('/health-records', methods=['POST'])
 @jwt_required()
