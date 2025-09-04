@@ -26,12 +26,14 @@ def validate_health_record(request):
 
 def validate_family_data(data, is_update=False):
     """验证家庭数据"""
+    from flask import current_app
+    
     if not data:
         return '请求数据不能为空'
     
-    # 创建时的必填字段
+    # 创建时的必填字段（移除phone，允许手机号为空）
     if not is_update:
-        required_fields = ['householdHead', 'address', 'phone', 'members']
+        required_fields = ['householdHead', 'address', 'members']
         
         for field in required_fields:
             if field not in data or not data[field]:
@@ -47,11 +49,8 @@ def validate_family_data(data, is_update=False):
             if member_error:
                 return f'第{i+1}个成员数据错误: {member_error}'
     
-    # 验证手机号格式（如果提供了）
-    if 'phone' in data and data['phone']:
-        phone = data['phone'].replace(' ', '').replace('-', '')
-        if not phone.isdigit() or len(phone) != 11:
-            return '手机号格式错误，应为11位数字'
+    # 手机号字段可以为空，不进行格式验证
+    # 如果需要验证手机号格式，可以在这里添加，但现在跳过所有验证
     
     return None
 
@@ -94,11 +93,8 @@ def validate_patient_data(data, is_update=False, is_member=False):
         if data['paymentStatus'] not in valid_statuses:
             return f'支付状态必须是: {", ".join(valid_statuses)}'
     
-    # 验证手机号格式（如果提供了）
-    if 'phone' in data and data['phone']:
-        phone = data['phone'].replace(' ', '').replace('-', '')
-        if not phone.isdigit() or len(phone) != 11:
-            return '手机号格式错误，应为11位数字'
+    # 成员手机号字段可以为空，不进行格式验证
+    # 如果需要验证手机号格式，可以在这里添加，但现在跳过所有验证
     
     return None
 

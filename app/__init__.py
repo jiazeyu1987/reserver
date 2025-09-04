@@ -28,6 +28,33 @@ def create_app(config_name='default'):
     cors.init_app(app)
     cache.init_app(app)
     
+    # JWT错误处理
+    @jwt.expired_token_loader
+    def expired_token_callback(jwt_header, jwt_payload):
+        app.logger.error("JWT token已过期")
+        return {'code': 422, 'message': 'JWT token已过期'}, 422
+    
+    @jwt.invalid_token_loader
+    def invalid_token_callback(error):
+        from flask import request
+        auth_header = request.headers.get('Authorization', 'None')
+        app.logger.error(f"JWT token无效: {error}")
+        app.logger.error(f"Authorization头内容: {auth_header}")
+        if auth_header and 'Bearer ' in auth_header:
+            token_part = auth_header.replace('Bearer ', '')
+            app.logger.error(f"Token部分: {token_part[:50]}...（长度：{len(token_part)}）")
+            segments = token_part.count('.')
+            app.logger.error(f"Token段数: {segments + 1}")
+        return {'code': 422, 'message': 'JWT token无效'}, 422
+    
+    @jwt.unauthorized_loader
+    def missing_token_callback(error):
+        from flask import request
+        auth_header = request.headers.get('Authorization', 'None')
+        app.logger.error(f"缺少JWT token: {error}")
+        app.logger.error(f"Authorization头内容: {auth_header}")
+        return {'code': 422, 'message': '缺少JWT token'}, 422
+    
     # 初始化Celery
     celery.conf.update(app.config)
     

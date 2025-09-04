@@ -17,8 +17,18 @@ patient_bp = Blueprint('patient', __name__, url_prefix='/api/v1')
 def create_family():
     """创建家庭档案"""
     try:
+        current_app.logger.info("进入create_family函数")
+        current_app.logger.info(f"请求头: {dict(request.headers)}")
+        
+        # 获取Authorization头
+        auth_header = request.headers.get('Authorization')
+        current_app.logger.info(f"Authorization头: {auth_header}")
+        
         data = request.get_json()
+        current_app.logger.info(f"请求数据: {data}")
+        
         if not data:
+            current_app.logger.error("请求数据为空")
             return jsonify({
                 'code': 422,
                 'message': '请求数据不能为空'
@@ -26,7 +36,10 @@ def create_family():
             
         # 获取当前用户ID并验证
         current_user_identity = get_jwt_identity()
+        current_app.logger.info(f"JWT identity: {current_user_identity}")
+        
         if not current_user_identity:
+            current_app.logger.error("JWT token无效 - current_user_identity为空")
             return jsonify({
                 'code': 422,
                 'message': 'JWT token无效'
@@ -34,21 +47,27 @@ def create_family():
             
         try:
             recorder_id = int(current_user_identity)
-        except (ValueError, TypeError):
+            current_app.logger.info(f"转换后的recorder_id: {recorder_id}")
+        except (ValueError, TypeError) as e:
+            current_app.logger.error(f"用户ID格式错误: {current_user_identity}, 错误: {str(e)}")
             return jsonify({
                 'code': 422,
                 'message': '用户ID格式错误'
             }), 422
         
         # 验证请求数据
+        current_app.logger.info("开始验证请求数据")
         validation_error = validate_family_data(data)
         if validation_error:
+            current_app.logger.error(f"数据验证失败: {validation_error}")
             return jsonify({
                 'code': 422,
                 'message': validation_error
             }), 422
         
+        current_app.logger.info("数据验证通过，调用FamilyService.create_family")
         family = FamilyService.create_family(data, recorder_id)  # 传入recorder_id
+        current_app.logger.info(f"家庭创建成功: {family.id}")
         
         return jsonify({
             'code': 200,
@@ -57,7 +76,7 @@ def create_family():
         })
         
     except Exception as e:
-        current_app.logger.error(f"创建家庭档案失败: {str(e)}")
+        current_app.logger.error(f"创建家庭档案失败: {str(e)}", exc_info=True)
         return jsonify({
             'code': 500,
             'message': f'服务器内部错误: {str(e)}'
@@ -79,7 +98,7 @@ def get_families():
             
         try:
             recorder_id = int(current_user_identity)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             return jsonify({
                 'code': 422,
                 'message': '用户ID格式错误'
@@ -97,7 +116,7 @@ def get_families():
             'data': result
         })
     except Exception as e:
-        current_app.logger.error(f"获取家庭列表失败: {str(e)}")
+        current_app.logger.error(f"获取家庭列表失败: {str(e)}", exc_info=True)
         return jsonify({
             'code': 500,
             'message': f'服务器内部错误: {str(e)}'

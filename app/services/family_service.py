@@ -3,6 +3,7 @@ from app.models.appointment import ServicePackage, PatientSubscription
 from app import db
 from sqlalchemy import and_, or_
 from datetime import datetime, date
+from flask import current_app
 import json
 
 class FamilyService:
@@ -92,35 +93,41 @@ class FamilyService:
     @staticmethod
     def get_families(recorder_id=None, page=1, limit=20, search=None):
         """获取家庭列表"""
-        query = db.session.query(Family)
-        
-        # 如果指定了recorder_id，只查询该记录员负责的家庭
-        if recorder_id:
-            query = query.join(Patient)\
-                .join(PatientSubscription)\
-                .filter(PatientSubscription.recorder_id == recorder_id)\
-                .distinct()
-        
-        # 搜索过滤
-        if search:
-            query = query.filter(
-                or_(
-                    Family.householdHead.contains(search),
-                    Family.address.contains(search),
-                    Family.phone.contains(search)
+        try:
+            query = db.session.query(Family)
+            
+            # 如果指定了recorder_id，只查询该记录员负责的家庭
+            if recorder_id:
+                query = query.join(Patient)\
+                    .join(PatientSubscription)\
+                    .filter(PatientSubscription.recorder_id == recorder_id)\
+                    .distinct()
+            
+            # 搜索过滤
+            if search:
+                query = query.filter(
+                    or_(
+                        Family.householdHead.contains(search),
+                        Family.address.contains(search),
+                        Family.phone.contains(search)
+                    )
                 )
-            )
-        
-        total = query.count()
-        families = query.offset((page - 1) * limit).limit(limit).all()
-        
-        return {
-            'families': [family.to_dict() for family in families],
-            'total': total,
-            'page': page,
-            'limit': limit,
-            'totalPages': (total + limit - 1) // limit
-        }
+            
+            total = query.count()
+            families = query.offset((page - 1) * limit).limit(limit).all()
+            
+            result = {
+                'families': [family.to_dict(include_members=True) for family in families],
+                'total': total,
+                'page': page,
+                'limit': limit,
+                'totalPages': (total + limit - 1) // limit
+            }
+            return result
+            
+        except Exception as e:
+            current_app.logger.error(f"FamilyService.get_families - 发生异常: {str(e)}", exc_info=True)
+            raise e
     
     @staticmethod
     def get_family_by_id(family_id, recorder_id=None):
