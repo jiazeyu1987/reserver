@@ -36,11 +36,28 @@ def get_appointments():
     """获取预约列表"""
     try:
         recorder_id = int(get_jwt_identity())
+        
+        # 详细记录请求参数
+        current_app.logger.info("=" * 60)
+        current_app.logger.info("📥 后端收到预约列表请求")
+        current_app.logger.info(f"  - recorder_id: {recorder_id}")
+        current_app.logger.info(f"  - 完整URL: {request.url}")
+        current_app.logger.info(f"  - 查询字符串: {request.query_string.decode()}")
+        current_app.logger.info(f"  - 请求方法: {request.method}")
+        current_app.logger.info(f"  - 所有参数: {dict(request.args)}")
+        
         page = request.args.get('page', 1, type=int)
         limit = request.args.get('limit', 20, type=int)
         status = request.args.get('status', '')
         date_from = request.args.get('date_from', '')
         date_to = request.args.get('date_to', '')
+        
+        current_app.logger.info(f"  - 解析后的参数:")
+        current_app.logger.info(f"    * page: {page}")
+        current_app.logger.info(f"    * limit: {limit}")
+        current_app.logger.info(f"    * status: '{status}'")
+        current_app.logger.info(f"    * date_from: '{date_from}'")
+        current_app.logger.info(f"    * date_to: '{date_to}'")
         
         # 解析日期参数
         date_from_obj = None
@@ -58,9 +75,23 @@ def get_appointments():
             except ValueError:
                 pass
         
+        current_app.logger.info("🔍 调用Service层查询预约")
+        current_app.logger.info(f"  - 传递给Service的参数:")
+        current_app.logger.info(f"    * recorder_id: {recorder_id}")
+        current_app.logger.info(f"    * page: {page}, limit: {limit}")
+        current_app.logger.info(f"    * status: '{status}'")
+        current_app.logger.info(f"    * date_from_obj: {date_from_obj}")
+        current_app.logger.info(f"    * date_to_obj: {date_to_obj}")
+        
         result = AppointmentService.get_appointments(
             recorder_id, page, limit, status, date_from_obj, date_to_obj
         )
+        
+        current_app.logger.info("📤 后端返回预约列表响应")
+        current_app.logger.info(f"  - 总预约数: {result['total']}")
+        current_app.logger.info(f"  - 返回预约数: {len(result['appointments'])}")
+        current_app.logger.info(f"  - 分页信息: 第{result['page']}页，每页{result['limit']}条")
+        current_app.logger.info("=" * 60)
         
         return jsonify({
             'code': 200,

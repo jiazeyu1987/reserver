@@ -55,12 +55,30 @@ class AppointmentService:
             
             # 日期范围过滤
             if date_from:
+                current_app.logger.info(f"AppointmentService.get_appointments - 添加开始日期过滤: {date_from} (类型: {type(date_from)})")
                 query = query.filter(Appointment.scheduled_date >= date_from)
-                current_app.logger.info(f"AppointmentService.get_appointments - 开始日期过滤: {date_from}")
             
             if date_to:
+                current_app.logger.info(f"AppointmentService.get_appointments - 添加结束日期过滤: {date_to} (类型: {type(date_to)})")
                 query = query.filter(Appointment.scheduled_date <= date_to)
-                current_app.logger.info(f"AppointmentService.get_appointments - 结束日期过滤: {date_to}")
+                
+            # 🔍 调试：查看过滤后的SQL查询
+            current_app.logger.info(f"🔍 调试：过滤后的SQL查询: {str(query)}")
+            
+            # 🔍 先查看过滤后的查询结果（未分页）
+            filtered_appointments = query.all()
+            current_app.logger.info(f"🔍 调试：过滤后的预约 (共{len(filtered_appointments)}条):")
+            for appt in filtered_appointments:
+                current_app.logger.info(f"  - ID:{appt.id}, 患者:{appt.patient.name}, 日期:{appt.scheduled_date}, 时间:{appt.start_time}")
+            
+            # 🔍 调试：查询该记录员的所有预约看看实际数据
+            debug_query = db.session.query(Appointment)\
+                .join(Patient)\
+                .filter(Appointment.recorder_id == recorder_id)
+            debug_appointments = debug_query.all()
+            current_app.logger.info(f"🔍 调试：记录员 {recorder_id} 的所有预约:")
+            for appt in debug_appointments:
+                current_app.logger.info(f"  - ID:{appt.id}, 患者:{appt.patient.name}, 日期:{appt.scheduled_date}, 时间:{appt.start_time}")
             
             # 排序
             query = query.order_by(Appointment.scheduled_date.desc(), Appointment.start_time)
