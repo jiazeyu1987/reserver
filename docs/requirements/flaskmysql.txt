@@ -1,0 +1,2404 @@
+# 记录员小程序后端设计文档 - Flask + MySQL
+
+## 1. 系统架构概览
+
+### 1.1 技术栈
+- **Web框架**: Flask 2.3+
+- **数据库**: MySQL 8.0+
+- **ORM**: SQLAlchemy
+- **认证**: Flask-JWT-Extended
+- **文件存储**: 本地存储 + 云存储（阿里云OSS/腾讯云COS）
+- **缓存**: Redis
+- **消息队列**: Celery + Redis
+- **API文档**: Flask-RESTX (Swagger)
+
+### 1.2 系统架构图
+```
+Frontend (小程序)
+       ↓
+API Gateway (Nginx)
+       ↓
+Flask Application
+       ↓
+┌─────────────┬─────────────┬─────────────┐
+│   MySQL     │    Redis    │   File      │
+│  (主数据库)   │   (缓存)     │  Storage    │
+└─────────────┴─────────────┴─────────────┘
+```
+
+## 2. 数据库设计
+
+### 2.1 用户与角色管理
+
+#### 用户表 (users)
+```sql
+CREATE TABLE users (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    phone VARCHAR(20) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('recorder', 'admin', 'doctor') NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    avatar VARCHAR(255),
+    status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_login TIMESTAMP NULL
+);
+```
+
+#### 记录员信息表 (recorders)
+```sql
+CREATE TABLE recorders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    employee_id VARCHAR(20) UNIQUE NOT NULL,
+    qualification_cert VARCHAR(255), -- 资格证件URL
+    health_cert VARCHAR(255), -- 健康证URL
+    cert_expiry_date DATE,
+    work_area TEXT, -- JSON格式存储工作区域
+    is_on_duty BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+```
+
+### 2.2 患者与家庭管理
+
+#### 家庭表 (families)
+```sql
+CREATE TABLE families (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    family_name VARCHAR(100) NOT NULL,
+    primary_address TEXT NOT NULL,
+    secondary_address TEXT,
+    contact_phone VARCHAR(20) NOT NULL,
+    emergency_contact VARCHAR(100),
+    emergency_phone VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+#### 患者表 (patients)
+```sql
+CREATE TABLE patients (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    family_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    gender ENUM('male', 'female') NOT NULL,
+    birth_date DATE NOT NULL,
+    id_card VARCHAR(18),
+    phone VARCHAR(20),
+    relationship_to_head VARCHAR(20) NOT NULL, -- 与户主关系
+    medical_history TEXT, -- JSON格式存储病史
+    allergies TEXT, -- 过敏史
+    current_medications TEXT, -- JSON格式存储用药情况
+    service_preferences TEXT, -- JSON格式存储服务偏好
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
+);
+```
+
+### 2.3 套餐与服务管理
+
+#### 服务套餐表 (service_packages)
+```sql
+CREATE TABLE service_packages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    duration_days INT NOT NULL, -- 套餐时长（天）
+    service_frequency INT NOT NULL, -- 服务频率（次/月）
+    service_items TEXT, -- JSON格式存储服务项目
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### 患者套餐订阅表 (patient_subscriptions)
+```sql
+CREATE TABLE patient_subscriptions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id INT NOT NULL,
+    package_id INT NOT NULL,
+    recorder_id INT, -- 分配的记录员
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    status ENUM('active', 'paused', 'cancelled', 'expired') DEFAULT 'active',
+    payment_status ENUM('paid', 'unpaid', 'refunded') DEFAULT 'unpaid',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (package_id) REFERENCES service_packages(id),
+    FOREIGN KEY (recorder_id) REFERENCES recorders(id)
+);
+```
+
+### 2.4 预约与访问记录
+
+#### 预约表 (appointments)
+```sql
+CREATE TABLE appointments (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id INT NOT NULL,
+    recorder_id INT NOT NULL,
+    scheduled_date DATE NOT NULL,
+    scheduled_time TIME NOT NULL,
+    appointment_type ENUM('regular', 'makeup', 'emergency') DEFAULT 'regular',
+    status ENUM('scheduled', 'confirmed', 'completed', 'cancelled', 'rescheduled') DEFAULT 'scheduled',
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (recorder_id) REFERENCES recorders(id)
+);
+```
+
+#### 健康记录表 (health_records)
+```sql
+CREATE TABLE health_records (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id INT NOT NULL,
+    recorder_id INT NOT NULL,
+    appointment_id INT,
+    visit_date DATE NOT NULL,
+    visit_time TIME NOT NULL,
+    location_lat DECIMAL(10,8), -- GPS纬度
+    location_lng DECIMAL(11,8), -- GPS经度
+    location_address TEXT,
+    vital_signs TEXT, -- JSON格式存储生命体征
+    symptoms TEXT, -- 症状记录
+    notes TEXT, -- 记录员备注
+    audio_file VARCHAR(255), -- 录音文件URL
+    photos TEXT, -- JSON格式存储照片URLs
+    patient_signature VARCHAR(255), -- 患者签名图片URL
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (recorder_id) REFERENCES recorders(id),
+    FOREIGN KEY (appointment_id) REFERENCES appointments(id)
+);
+```
+
+### 2.5 医疗协作
+
+#### 医生表 (doctors)
+```sql
+CREATE TABLE doctors (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    license_number VARCHAR(50) UNIQUE NOT NULL,
+    specialty VARCHAR(100) NOT NULL,
+    hospital VARCHAR(100),
+    department VARCHAR(100),
+    title VARCHAR(50), -- 职称
+    consultation_fee DECIMAL(8,2),
+    is_available BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+```
+
+#### 医嘱表 (medical_orders)
+```sql
+CREATE TABLE medical_orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id INT NOT NULL,
+    doctor_id INT NOT NULL,
+    health_record_id INT,
+    order_type ENUM('medication', 'examination', 'lifestyle', 'followup') NOT NULL,
+    content TEXT NOT NULL,
+    dosage VARCHAR(100), -- 用于药物医嘱
+    frequency VARCHAR(50), -- 用于药物医嘱
+    duration VARCHAR(50), -- 用于药物医嘱
+    notes TEXT,
+    status ENUM('active', 'completed', 'cancelled') DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (doctor_id) REFERENCES doctors(id),
+    FOREIGN KEY (health_record_id) REFERENCES health_records(id)
+);
+```
+
+### 2.6 医院预约系统
+
+#### 合作医院表 (partner_hospitals)
+```sql
+CREATE TABLE partner_hospitals (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(200) NOT NULL,
+    address TEXT NOT NULL,
+    phone VARCHAR(20),
+    level VARCHAR(20), -- 医院等级
+    departments TEXT, -- JSON格式存储科室信息
+    cooperation_status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### 医院科室表 (hospital_departments)
+```sql
+CREATE TABLE hospital_departments (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    hospital_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    available_times TEXT, -- JSON格式存储可预约时间段
+    is_active BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (hospital_id) REFERENCES partner_hospitals(id) ON DELETE CASCADE
+);
+```
+
+#### 医院医生表 (hospital_doctors)
+```sql
+CREATE TABLE hospital_doctors (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    hospital_id INT NOT NULL,
+    department_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    title VARCHAR(50),
+    specialty TEXT,
+    schedule TEXT, -- JSON格式存储出诊时间
+    consultation_fee DECIMAL(8,2),
+    is_available BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (hospital_id) REFERENCES partner_hospitals(id),
+    FOREIGN KEY (department_id) REFERENCES hospital_departments(id)
+);
+```
+
+#### 医院预约表 (hospital_appointments)
+```sql
+CREATE TABLE hospital_appointments (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    patient_id INT NOT NULL,
+    recorder_id INT NOT NULL,
+    hospital_id INT NOT NULL,
+    department_id INT NOT NULL,
+    doctor_id INT,
+    appointment_date DATE NOT NULL,
+    appointment_time TIME NOT NULL,
+    status ENUM('pending', 'confirmed', 'completed', 'cancelled') DEFAULT 'pending',
+    appointment_number VARCHAR(50), -- 预约号
+    fee DECIMAL(8,2),
+    notes TEXT,
+    result_notes TEXT, -- 预约结果备注
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES patients(id),
+    FOREIGN KEY (recorder_id) REFERENCES recorders(id),
+    FOREIGN KEY (hospital_id) REFERENCES partner_hospitals(id),
+    FOREIGN KEY (department_id) REFERENCES hospital_departments(id),
+    FOREIGN KEY (doctor_id) REFERENCES hospital_doctors(id)
+);
+```
+
+### 2.7 系统日志与审计
+
+#### 操作日志表 (operation_logs)
+```sql
+CREATE TABLE operation_logs (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    operation_type VARCHAR(50) NOT NULL,
+    resource_type VARCHAR(50) NOT NULL,
+    resource_id INT,
+    operation_details TEXT, -- JSON格式存储操作详情
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+```
+
+## 3. API设计
+
+### 3.1 认证相关 API
+
+#### 用户登录
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{
+    "username": "string",
+    "password": "string"
+}
+
+Response:
+{
+    "code": 200,
+    "message": "登录成功",
+    "data": {
+        "access_token": "string",
+        "refresh_token": "string",
+        "user": {
+            "id": 1,
+            "username": "recorder001",
+            "name": "张三",
+            "role": "recorder",
+            "avatar": "string"
+        }
+    }
+}
+```
+
+#### 刷新Token
+```http
+POST /api/v1/auth/refresh
+Authorization: Bearer <refresh_token>
+
+Response:
+{
+    "code": 200,
+    "data": {
+        "access_token": "string"
+    }
+}
+```
+
+### 3.2 患者与家庭管理 API
+
+#### 获取记录员负责的家庭列表
+```http
+GET /api/v1/families?page=1&limit=20&search=关键词
+Authorization: Bearer <access_token>
+
+Response:
+{
+    "code": 200,
+    "data": {
+        "families": [
+            {
+                "id": 1,
+                "family_name": "张家",
+                "primary_address": "北京市朝阳区xxx",
+                "contact_phone": "13800138000",
+                "patient_count": 3,
+                "active_subscriptions": 2
+            }
+        ],
+        "total": 50,
+        "page": 1,
+        "limit": 20
+    }
+}
+```
+
+#### 获取家庭详情
+```http
+GET /api/v1/families/{family_id}
+Authorization: Bearer <access_token>
+
+Response:
+{
+    "code": 200,
+    "data": {
+        "id": 1,
+        "family_name": "张家",
+        "primary_address": "北京市朝阳区xxx",
+        "patients": [
+            {
+                "id": 1,
+                "name": "张老三",
+                "age": 75,
+                "gender": "male",
+                "relationship_to_head": "户主",
+                "current_subscription": {
+                    "package_name": "基础健康监护",
+                    "status": "active",
+                    "end_date": "2024-12-31"
+                },
+                "last_record": {
+                    "date": "2024-01-15",
+                    "notes": "血压正常，精神状态良好"
+                }
+            }
+        ]
+    }
+}
+```
+
+### 3.3 预约管理 API
+
+#### 获取今日预约列表
+```http
+GET /api/v1/appointments/today
+Authorization: Bearer <access_token>
+
+Response:
+{
+    "code": 200,
+    "data": [
+        {
+            "id": 1,
+            "patient": {
+                "id": 1,
+                "name": "张老三",
+                "family_name": "张家",
+                "address": "北京市朝阳区xxx"
+            },
+            "scheduled_time": "09:00",
+            "status": "confirmed",
+            "notes": "定期检查"
+        }
+    ]
+}
+```
+
+#### 创建健康记录
+```http
+POST /api/v1/health-records
+Authorization: Bearer <access_token>
+Content-Type: multipart/form-data
+
+{
+    "patient_id": 1,
+    "appointment_id": 1,
+    "visit_date": "2024-01-15",
+    "visit_time": "09:30",
+    "location_lat": 39.908860,
+    "location_lng": 116.397390,
+    "vital_signs": {
+        "blood_pressure": "120/80",
+        "heart_rate": 72,
+        "temperature": 36.5
+    },
+    "symptoms": "无明显症状",
+    "notes": "患者精神状态良好",
+    "audio_file": <file>,
+    "photos": [<file1>, <file2>],
+    "patient_signature": <file>
+}
+
+Response:
+{
+    "code": 200,
+    "message": "健康记录创建成功",
+    "data": {
+        "record_id": 1
+    }
+}
+```
+
+### 3.4 医院预约 API
+
+#### 获取合作医院列表
+```http
+GET /api/v1/hospitals?search=北京&department=内科
+Authorization: Bearer <access_token>
+
+Response:
+{
+    "code": 200,
+    "data": [
+        {
+            "id": 1,
+            "name": "北京协和医院",
+            "address": "北京市东城区帅府园一号",
+            "level": "三甲",
+            "departments": [
+                {
+                    "id": 1,
+                    "name": "内科",
+                    "available": true
+                }
+            ]
+        }
+    ]
+}
+```
+
+#### 创建医院预约
+```http
+POST /api/v1/hospital-appointments
+Authorization: Bearer <access_token>
+
+{
+    "patient_id": 1,
+    "hospital_id": 1,
+    "department_id": 1,
+    "doctor_id": 1,
+    "appointment_date": "2024-01-20",
+    "appointment_time": "14:00",
+    "notes": "患者血压偏高，需要专家诊断"
+}
+
+Response:
+{
+    "code": 200,
+    "message": "预约申请提交成功",
+    "data": {
+        "appointment_id": 1,
+        "status": "pending"
+    }
+}
+```
+
+### 3.5 文件上传 API
+
+#### 文件上传
+```http
+POST /api/v1/files/upload
+Authorization: Bearer <access_token>
+Content-Type: multipart/form-data
+
+{
+    "file": <file>,
+    "type": "audio|image|document"
+}
+
+Response:
+{
+    "code": 200,
+    "data": {
+        "file_url": "https://example.com/files/xxx.jpg",
+        "file_id": "uuid"
+    }
+}
+```
+
+## 4. Flask应用结构
+
+### 4.1 项目目录结构
+```
+app/
+├── __init__.py
+├── config.py
+├── models/
+│   ├── __init__.py
+│   ├── user.py
+│   ├── patient.py
+│   ├── appointment.py
+│   └── health_record.py
+├── views/
+│   ├── __init__.py
+│   ├── auth.py
+│   ├── patient.py
+│   ├── appointment.py
+│   └── hospital.py
+├── services/
+│   ├── __init__.py
+│   ├── auth_service.py
+│   ├── patient_service.py
+│   └── file_service.py
+├── utils/
+│   ├── __init__.py
+│   ├── decorators.py
+│   ├── validators.py
+│   └── helpers.py
+├── extensions.py
+├── celery_app.py
+└── tasks/
+    ├── __init__.py
+    └── notification_tasks.py
+requirements.txt
+run.py
+```
+
+### 4.2 核心配置 (config.py)
+```python
+import os
+from datetime import timedelta
+
+class Config:
+    SECRET_KEY = os.environ.get('SECRET_KEY') or 'your-secret-key'
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
+        'mysql+pymysql://user:password@localhost/recorder_db'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
+    # JWT配置
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or 'jwt-secret-key'
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=2)
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
+    
+    # Redis配置
+    REDIS_URL = os.environ.get('REDIS_URL') or 'redis://localhost:6379/0'
+    
+    # 文件上传配置
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or 'uploads'
+    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+    
+    # Celery配置
+    CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL') or 'redis://localhost:6379/0'
+    CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND') or 'redis://localhost:6379/0'
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+
+class ProductionConfig(Config):
+    DEBUG = False
+
+config = {
+    'development': DevelopmentConfig,
+    'production': ProductionConfig,
+    'default': DevelopmentConfig
+}
+```
+
+### 4.3 扩展初始化 (extensions.py)
+```python
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_jwt_extended import JWTManager
+from flask_cors import CORS
+from flask_caching import Cache
+from celery import Celery
+
+db = SQLAlchemy()
+migrate = Migrate()
+jwt = JWTManager()
+cors = CORS()
+cache = Cache()
+celery = Celery()
+
+def init_extensions(app):
+    db.init_app(app)
+    migrate.init_app(app, db)
+    jwt.init_app(app)
+    cors.init_app(app)
+    cache.init_app(app)
+    
+    # 初始化Celery
+    celery.conf.update(app.config)
+    
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+    
+    celery.Task = ContextTask
+```
+
+### 4.4 模型示例 (models/patient.py)
+```python
+from extensions import db
+from datetime import datetime
+import json
+
+class Family(db.Model):
+    __tablename__ = 'families'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    family_name = db.Column(db.String(100), nullable=False)
+    primary_address = db.Column(db.Text, nullable=False)
+    secondary_address = db.Column(db.Text)
+    contact_phone = db.Column(db.String(20), nullable=False)
+    emergency_contact = db.Column(db.String(100))
+    emergency_phone = db.Column(db.String(20))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关系
+    patients = db.relationship('Patient', backref='family', lazy=True, cascade='all, delete-orphan')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'family_name': self.family_name,
+            'primary_address': self.primary_address,
+            'contact_phone': self.contact_phone,
+            'patient_count': len(self.patients),
+            'created_at': self.created_at.isoformat()
+        }
+
+class Patient(db.Model):
+    __tablename__ = 'patients'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('families.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    gender = db.Column(db.Enum('male', 'female'), nullable=False)
+    birth_date = db.Column(db.Date, nullable=False)
+    id_card = db.Column(db.String(18))
+    phone = db.Column(db.String(20))
+    relationship_to_head = db.Column(db.String(20), nullable=False)
+    medical_history = db.Column(db.Text)  # JSON string
+    allergies = db.Column(db.Text)
+    current_medications = db.Column(db.Text)  # JSON string
+    service_preferences = db.Column(db.Text)  # JSON string
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关系
+    health_records = db.relationship('HealthRecord', backref='patient', lazy=True)
+    subscriptions = db.relationship('PatientSubscription', backref='patient', lazy=True)
+    
+    @property
+    def age(self):
+        from datetime import date
+        today = date.today()
+        return today.year - self.birth_date.year - ((today.month, today.day) < (self.birth_date.month, self.birth_date.day))
+    
+    def get_medical_history(self):
+        return json.loads(self.medical_history) if self.medical_history else []
+    
+    def set_medical_history(self, history_list):
+        self.medical_history = json.dumps(history_list, ensure_ascii=False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'gender': self.gender,
+            'age': self.age,
+            'phone': self.phone,
+            'relationship_to_head': self.relationship_to_head,
+            'medical_history': self.get_medical_history(),
+            'is_active': self.is_active
+        }
+```
+
+### 4.5 服务层示例 (services/patient_service.py)
+```python
+from models.patient import Patient, Family
+from models.health_record import HealthRecord
+from extensions import db
+from sqlalchemy import and_, or_
+from datetime import datetime, date
+
+class PatientService:
+    
+    @staticmethod
+    def get_recorder_families(recorder_id, page=1, limit=20, search=None):
+        """获取记录员负责的家庭列表"""
+        query = db.session.query(Family)\
+            .join(Patient)\
+            .join(PatientSubscription)\
+            .filter(PatientSubscription.recorder_id == recorder_id)\
+            .distinct()
+        
+        if search:
+            query = query.filter(
+                or_(
+                    Family.family_name.contains(search),
+                    Family.primary_address.contains(search),
+                    Patient.name.contains(search)
+                )
+            )
+        
+        families = query.offset((page - 1) * limit).limit(limit).all()
+        total = query.count()
+        
+        return {
+            'families': [family.to_dict() for family in families],
+            'total': total,
+            'page': page,
+            'limit': limit
+        }
+    
+    @staticmethod
+    def get_family_detail(family_id, recorder_id):
+        """获取家庭详情（包含患者信息）"""
+        family = db.session.query(Family)\
+            .join(Patient)\
+            .join(PatientSubscription)\
+            .filter(
+                and_(
+                    Family.id == family_id,
+                    PatientSubscription.recorder_id == recorder_id
+                )
+            ).first()
+        
+        if not family:
+            return None
+        
+        # 获取患者详细信息
+        patients_data = []
+        for patient in family.patients:
+            # 获取最新健康记录
+            last_record = db.session.query(HealthRecord)\
+                .filter(HealthRecord.patient_id == patient.id)\
+                .order_by(HealthRecord.created_at.desc())\
+                .first()
+            
+            # 获取当前套餐
+            current_subscription = db.session.query(PatientSubscription)\
+                .filter(
+                    and_(
+                        PatientSubscription.patient_id == patient.id,
+                        PatientSubscription.status == 'active'
+                    )
+                )\
+                .first()
+            
+            patient_data = patient.to_dict()
+            patient_data['last_record'] = last_record.to_dict() if last_record else None
+            patient_data['current_subscription'] = current_subscription.to_dict() if current_subscription else None
+            patients_data.append(patient_data)
+        
+        result = family.to_dict()
+        result['patients'] = patients_data
+        return result
+    
+    @staticmethod
+    def create_health_record(data):
+        """创建健康记录"""
+        try:
+            record = HealthRecord(
+                patient_id=data['patient_id'],
+                recorder_id=data['recorder_id'],
+                appointment_id=data.get('appointment_id'),
+                visit_date=datetime.strptime(data['visit_date'], '%Y-%m-%d').date(),
+                visit_time=datetime.strptime(data['visit_time'], '%H:%M').time(),
+                location_lat=data.get('location_lat'),
+                location_lng=data.get('location_lng'),
+                location_address=data.get('location_address'),
+                vital_signs=data.get('vital_signs'),
+                symptoms=data.get('symptoms'),
+                notes=data.get('notes'),
+                audio_file=data.get('audio_file'),
+                photos=data.get('photos'),
+                patient_signature=data.get('patient_signature')
+            )
+            
+            db.session.add(record)
+            db.session.commit()
+            
+            return record
+        except Exception as e:
+            db.session.rollback()
+            raise e
+```
+
+### 4.6 视图层示例 (views/patient.py)
+```python
+from flask import Blueprint, request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from services.patient_service import PatientService
+from utils.decorators import recorder_required
+from utils.validators import validate_health_record
+from utils.helpers import handle_file_upload
+
+patient_bp = Blueprint('patient', __name__, url_prefix='/api/v1')
+
+@patient_bp.route('/families', methods=['GET'])
+@jwt_required()
+@recorder_required
+def get_families():
+    """获取家庭列表"""
+    try:
+        recorder_id = get_jwt_identity()
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 20, type=int)
+        search = request.args.get('search', '')
+        
+        result = PatientService.get_recorder_families(recorder_id, page, limit, search)
+        
+        return jsonify({
+            'code': 200,
+            'message': '获取成功',
+            'data': result
+        })
+    except Exception as e:
+        current_app.logger.error(f"获取家庭列表失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': '服务器内部错误'
+        }), 500
+
+@patient_bp.route('/families/<int:family_id>', methods=['GET'])
+@jwt_required()
+@recorder_required
+def get_family_detail(family_id):
+    """获取家庭详情"""
+    try:
+        recorder_id = get_jwt_identity()
+        result = PatientService.get_family_detail(family_id, recorder_id)
+        
+        if not result:
+            return jsonify({
+                'code': 404,
+                'message': '家庭不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '获取成功',
+            'data': result
+        })
+    except Exception as e:
+        current_app.logger.error(f"获取家庭详情失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': '服务器内部错误'
+        }), 500
+
+@patient_bp.route('/health-records', methods=['POST'])
+@jwt_required()
+@recorder_required
+def create_health_record():
+    """创建健康记录"""
+    try:
+        recorder_id = get_jwt_identity()
+        
+        # 验证请求数据
+        validation_error = validate_health_record(request)
+        if validation_error:
+            return jsonify({
+                'code': 400,
+                'message': validation_error
+            }), 400
+        
+        # 处理文件上传
+        data = request.form.to_dict()
+        data['recorder_id'] = recorder_id
+        
+        # 处理音频文件
+        if 'audio_file' in request.files:
+            audio_file = request.files['audio_file']
+            data['audio_file'] = handle_file_upload(audio_file, 'audio')
+        
+        # 处理照片文件
+        if 'photos' in request.files:
+            photos = request.files.getlist('photos')
+            photo_urls = [handle_file_upload(photo, 'image') for photo in photos]
+            data['photos'] = json.dumps(photo_urls)
+        
+        # 处理患者签名
+        if 'patient_signature' in request.files:
+            signature_file = request.files['patient_signature']
+            data['patient_signature'] = handle_file_upload(signature_file, 'image')
+        
+        # 处理生命体征数据
+        if 'vital_signs' in data:
+            data['vital_signs'] = json.dumps(json.loads(data['vital_signs']))
+        
+        record = PatientService.create_health_record(data)
+        
+        # 异步发送医嘱请求给医生
+        from tasks.notification_tasks import send_medical_order_request
+        send_medical_order_request.delay(record.id)
+        
+        return jsonify({
+            'code': 200,
+            'message': '健康记录创建成功',
+            'data': {
+                'record_id': record.id
+            }
+        })
+    except Exception as e:
+        current_app.logger.error(f"创建健康记录失败: {str(e)}")
+        return jsonify({
+            'code': 500,
+            'message': '服务器内部错误'
+        }), 500
+```
+
+## 5. 工具类和装饰器
+
+### 5.1 装饰器 (utils/decorators.py)
+```python
+from functools import wraps
+from flask import jsonify
+from flask_jwt_extended import get_jwt_identity
+from models.user import User
+from extensions import db
+
+def recorder_required(f):
+    """记录员权限装饰器"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        current_user_id = get_jwt_identity()
+        user = db.session.query(User).filter(User.id == current_user_id).first()
+        
+        if not user or user.role != 'recorder':
+            return jsonify({
+                'code': 403,
+                'message': '权限不足，需要记录员权限'
+            }), 403
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+def admin_required(f):
+    """管理员权限装饰器"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        current_user_id = get_jwt_identity()
+        user = db.session.query(User).filter(User.id == current_user_id).first()
+        
+        if not user or user.role != 'admin':
+            return jsonify({
+                'code': 403,
+                'message': '权限不足，需要管理员权限'
+            }), 403
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+def log_operation(operation_type, resource_type):
+    """操作日志装饰器"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            from flask import request
+            from models.operation_log import OperationLog
+            from utils.helpers import get_client_ip
+            
+            result = f(*args, **kwargs)
+            
+            # 记录操作日志
+            try:
+                user_id = get_jwt_identity()
+                log = OperationLog(
+                    user_id=user_id,
+                    operation_type=operation_type,
+                    resource_type=resource_type,
+                    operation_details=json.dumps({
+                        'url': request.url,
+                        'method': request.method,
+                        'args': request.args.to_dict(),
+                        'status_code': result[1] if isinstance(result, tuple) else 200
+                    }, ensure_ascii=False),
+                    ip_address=get_client_ip(),
+                    user_agent=request.headers.get('User-Agent')
+                )
+                db.session.add(log)
+                db.session.commit()
+            except Exception as e:
+                # 日志记录失败不应影响主要功能
+                current_app.logger.error(f"操作日志记录失败: {str(e)}")
+            
+            return result
+        return decorated_function
+    return decorator
+```
+
+### 5.2 验证器 (utils/validators.py)
+```python
+import json
+from datetime import datetime
+from flask import request
+
+def validate_health_record(request):
+    """验证健康记录数据"""
+    required_fields = ['patient_id', 'visit_date', 'visit_time']
+    
+    for field in required_fields:
+        if field not in request.form or not request.form[field]:
+            return f'缺少必填字段: {field}'
+    
+    # 验证日期格式
+    try:
+        datetime.strptime(request.form['visit_date'], '%Y-%m-%d')
+    except ValueError:
+        return '日期格式错误，应为YYYY-MM-DD'
+    
+    # 验证时间格式
+    try:
+        datetime.strptime(request.form['visit_time'], '%H:%M')
+    except ValueError:
+        return '时间格式错误，应为HH:MM'
+    
+    # 验证生命体征数据格式
+    if 'vital_signs' in request.form:
+        try:
+            json.loads(request.form['vital_signs'])
+        except json.JSONDecodeError:
+            return '生命体征数据格式错误，应为JSON格式'
+    
+    return None
+
+def validate_appointment(data):
+    """验证预约数据"""
+    required_fields = ['patient_id', 'scheduled_date', 'scheduled_time']
+    
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return f'缺少必填字段: {field}'
+    
+    # 验证预约时间不能是过去时间
+    appointment_datetime = datetime.combine(
+        datetime.strptime(data['scheduled_date'], '%Y-%m-%d').date(),
+        datetime.strptime(data['scheduled_time'], '%H:%M').time()
+    )
+    
+    if appointment_datetime <= datetime.now():
+        return '预约时间不能是过去时间'
+    
+    return None
+
+def validate_hospital_appointment(data):
+    """验证医院预约数据"""
+    required_fields = ['patient_id', 'hospital_id', 'department_id', 'appointment_date', 'appointment_time']
+    
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return f'缺少必填字段: {field}'
+    
+    return None
+```
+
+### 5.3 辅助函数 (utils/helpers.py)
+```python
+import os
+import uuid
+import json
+from datetime import datetime
+from flask import request, current_app
+from werkzeug.utils import secure_filename
+from PIL import Image
+import redis
+
+# Redis客户端
+redis_client = redis.Redis.from_url(current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'))
+
+def get_client_ip():
+    """获取客户端IP地址"""
+    if request.headers.getlist("X-Forwarded-For"):
+        ip = request.headers.getlist("X-Forwarded-For")[0]
+    else:
+        ip = request.remote_addr
+    return ip
+
+def allowed_file(filename, file_type):
+    """检查文件类型是否允许"""
+    ALLOWED_EXTENSIONS = {
+        'image': {'png', 'jpg', 'jpeg', 'gif', 'webp'},
+        'audio': {'mp3', 'wav', 'aac', 'm4a'},
+        'document': {'pdf', 'doc', 'docx', 'txt'}
+    }
+    
+    if file_type not in ALLOWED_EXTENSIONS:
+        return False
+    
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS[file_type]
+
+def handle_file_upload(file, file_type):
+    """处理文件上传"""
+    if not file or not allowed_file(file.filename, file_type):
+        return None
+    
+    # 生成唯一文件名
+    filename = secure_filename(file.filename)
+    name, ext = os.path.splitext(filename)
+    unique_filename = f"{uuid.uuid4().hex}{ext}"
+    
+    # 创建上传目录
+    upload_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], file_type)
+    os.makedirs(upload_folder, exist_ok=True)
+    
+    file_path = os.path.join(upload_folder, unique_filename)
+    file.save(file_path)
+    
+    # 如果是图片，生成缩略图
+    if file_type == 'image':
+        generate_thumbnail(file_path)
+    
+    # 返回文件URL
+    return f"/static/uploads/{file_type}/{unique_filename}"
+
+def generate_thumbnail(image_path):
+    """生成缩略图"""
+    try:
+        with Image.open(image_path) as img:
+            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+            
+            # 保存缩略图
+            name, ext = os.path.splitext(image_path)
+            thumbnail_path = f"{name}_thumb{ext}"
+            img.save(thumbnail_path)
+    except Exception as e:
+        current_app.logger.error(f"生成缩略图失败: {str(e)}")
+
+def cache_key(prefix, *args):
+    """生成缓存键"""
+    key_parts = [prefix] + [str(arg) for arg in args]
+    return ":".join(key_parts)
+
+def set_cache(key, value, expire=3600):
+    """设置缓存"""
+    try:
+        redis_client.setex(key, expire, json.dumps(value, ensure_ascii=False, default=str))
+        return True
+    except Exception as e:
+        current_app.logger.error(f"设置缓存失败: {str(e)}")
+        return False
+
+def get_cache(key):
+    """获取缓存"""
+    try:
+        value = redis_client.get(key)
+        if value:
+            return json.loads(value)
+        return None
+    except Exception as e:
+        current_app.logger.error(f"获取缓存失败: {str(e)}")
+        return None
+
+def delete_cache(key):
+    """删除缓存"""
+    try:
+        redis_client.delete(key)
+        return True
+    except Exception as e:
+        current_app.logger.error(f"删除缓存失败: {str(e)}")
+        return False
+
+def paginate_query(query, page, per_page):
+    """分页查询辅助函数"""
+    total = query.count()
+    items = query.offset((page - 1) * per_page).limit(per_page).all()
+    
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'pages': (total + per_page - 1) // per_page
+    }
+
+def format_datetime(dt):
+    """格式化日期时间"""
+    if isinstance(dt, datetime):
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    return str(dt)
+```
+
+## 6. 异步任务
+
+### 6.1 Celery任务 (tasks/notification_tasks.py)
+```python
+from celery_app import celery
+from extensions import db
+from models.health_record import HealthRecord
+from models.patient import Patient
+from models.doctor import Doctor
+from models.medical_order import MedicalOrder
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+@celery.task(bind=True, max_retries=3)
+def send_medical_order_request(self, health_record_id):
+    """发送医嘱请求给医生"""
+    try:
+        record = db.session.query(HealthRecord).get(health_record_id)
+        if not record:
+            logger.error(f"健康记录不存在: {health_record_id}")
+            return
+        
+        patient = record.patient
+        # 获取患者的主治医生或默认医生
+        doctor = get_patient_doctor(patient.id)
+        
+        if not doctor:
+            logger.warning(f"患者 {patient.id} 没有分配医生")
+            return
+        
+        # 创建医嘱请求通知
+        notification_data = {
+            'type': 'medical_order_request',
+            'patient_name': patient.name,
+            'recorder_name': record.recorder.name,
+            'visit_date': record.visit_date.strftime('%Y-%m-%d'),
+            'symptoms': record.symptoms,
+            'vital_signs': json.loads(record.vital_signs) if record.vital_signs else {},
+            'notes': record.notes,
+            'health_record_id': health_record_id
+        }
+        
+        # 发送推送通知给医生
+        send_push_notification.delay(doctor.user_id, notification_data)
+        
+        logger.info(f"医嘱请求已发送给医生 {doctor.id}，健康记录 {health_record_id}")
+        
+    except Exception as exc:
+        logger.error(f"发送医嘱请求失败: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60)
+
+@celery.task(bind=True, max_retries=3)
+def send_push_notification(self, user_id, notification_data):
+    """发送推送通知"""
+    try:
+        # 这里实现具体的推送逻辑
+        # 可以集成极光推送、友盟推送等第三方服务
+        
+        # 示例：保存通知到数据库
+        from models.notification import Notification
+        
+        notification = Notification(
+            user_id=user_id,
+            title=notification_data.get('title', '新的医嘱请求'),
+            content=json.dumps(notification_data, ensure_ascii=False),
+            type=notification_data.get('type', 'general'),
+            status='unread'
+        )
+        
+        db.session.add(notification)
+        db.session.commit()
+        
+        logger.info(f"推送通知已发送给用户 {user_id}")
+        
+    except Exception as exc:
+        logger.error(f"发送推送通知失败: {str(exc)}")
+        raise self.retry(exc=exc, countdown=30)
+
+@celery.task
+def send_appointment_reminder():
+    """发送预约提醒"""
+    from datetime import datetime, timedelta
+    from models.appointment import Appointment
+    
+    # 获取明天的预约
+    tomorrow = datetime.now().date() + timedelta(days=1)
+    appointments = db.session.query(Appointment)\
+        .filter(Appointment.scheduled_date == tomorrow)\
+        .filter(Appointment.status == 'confirmed')\
+        .all()
+    
+    for appointment in appointments:
+        notification_data = {
+            'type': 'appointment_reminder',
+            'title': '明日预约提醒',
+            'patient_name': appointment.patient.name,
+            'appointment_time': appointment.scheduled_time.strftime('%H:%M'),
+            'address': appointment.patient.family.primary_address
+        }
+        
+        send_push_notification.delay(appointment.recorder.user_id, notification_data)
+    
+    logger.info(f"已发送 {len(appointments)} 个预约提醒")
+
+@celery.task
+def check_certificate_expiry():
+    """检查证书到期提醒"""
+    from datetime import datetime, timedelta
+    from models.user import Recorder
+    
+    # 获取30天内到期的证书
+    expiry_threshold = datetime.now().date() + timedelta(days=30)
+    recorders = db.session.query(Recorder)\
+        .filter(Recorder.cert_expiry_date <= expiry_threshold)\
+        .all()
+    
+    for recorder in recorders:
+        days_left = (recorder.cert_expiry_date - datetime.now().date()).days
+        
+        notification_data = {
+            'type': 'certificate_expiry',
+            'title': '证书即将到期',
+            'content': f'您的资格证书将在 {days_left} 天后到期，请及时更新。',
+            'expiry_date': recorder.cert_expiry_date.strftime('%Y-%m-%d')
+        }
+        
+        send_push_notification.delay(recorder.user_id, notification_data)
+    
+    logger.info(f"已发送 {len(recorders)} 个证书到期提醒")
+
+def get_patient_doctor(patient_id):
+    """获取患者的医生"""
+    # 这里可以实现患者医生分配逻辑
+    # 示例：获取最近给该患者下过医嘱的医生
+    latest_order = db.session.query(MedicalOrder)\
+        .filter(MedicalOrder.patient_id == patient_id)\
+        .order_by(MedicalOrder.created_at.desc())\
+        .first()
+    
+    if latest_order:
+        return latest_order.doctor
+    
+    # 如果没有历史医嘱，返回默认医生
+    return db.session.query(Doctor).filter(Doctor.is_available == True).first()
+```
+
+## 7. 定时任务配置
+
+### 7.1 Celery Beat配置
+```python
+# celery_app.py
+from celery import Celery
+from celery.schedules import crontab
+
+celery = Celery('recorder_app')
+
+# Celery Beat定时任务配置
+celery.conf.beat_schedule = {
+    # 每天20:00发送明日预约提醒
+    'send-appointment-reminder': {
+        'task': 'tasks.notification_tasks.send_appointment_reminder',
+        'schedule': crontab(hour=20, minute=0),
+    },
+    
+    # 每月1号检查证书到期情况
+    'check-certificate-expiry': {
+        'task': 'tasks.notification_tasks.check_certificate_expiry',
+        'schedule': crontab(day_of_month=1, hour=9, minute=0),
+    },
+    
+    # 每天凌晨2点清理过期的临时文件
+    'cleanup-temp-files': {
+        'task': 'tasks.maintenance_tasks.cleanup_temp_files',
+        'schedule': crontab(hour=2, minute=0),
+    },
+    
+    # 每周日生成工作统计报告
+    'generate-weekly-report': {
+        'task': 'tasks.report_tasks.generate_weekly_report',
+        'schedule': crontab(day_of_week=0, hour=8, minute=0),
+    },
+}
+
+celery.conf.timezone = 'Asia/Shanghai'
+```
+
+## 8. 部署配置
+
+### 8.1 Docker配置
+
+#### Dockerfile
+```dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Python依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制应用代码
+COPY . .
+
+# 创建上传目录
+RUN mkdir -p uploads/image uploads/audio uploads/document
+
+# 暴露端口
+EXPOSE 5000
+
+# 启动命令
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "run:app"]
+```
+
+#### docker-compose.yml
+```yaml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=mysql+pymysql://recorder:password@db:3306/recorder_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./uploads:/app/uploads
+    restart: always
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: recorder_db
+      MYSQL_USER: recorder
+      MYSQL_PASSWORD: password
+      MYSQL_ROOT_PASSWORD: rootpassword
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: always
+
+  celery_worker:
+    build: .
+    command: celery -A celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=mysql+pymysql://recorder:password@db:3306/recorder_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./uploads:/app/uploads
+    restart: always
+
+  celery_beat:
+    build: .
+    command: celery -A celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=mysql+pymysql://recorder:password@db:3306/recorder_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./uploads:/var/www/static/uploads
+    depends_on:
+      - app
+    restart: always
+
+volumes:
+  mysql_data:
+```
+
+### 8.2 Nginx配置 (nginx.conf)
+```nginx
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream app {
+        server app:5000;
+    }
+
+    server {
+        listen 80;
+        server_name your-domain.com;
+
+        client_max_body_size 16M;
+
+        # 静态文件服务
+        location /static/ {
+            alias /var/www/static/;
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # API请求代理
+        location /api/ {
+            proxy_pass http://app;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            
+            # 增加超时时间，适应文件上传
+            proxy_read_timeout 300;
+            proxy_connect_timeout 300;
+            proxy_send_timeout 300;
+        }
+
+        # 健康检查
+        location /health {
+            proxy_pass http://app;
+            access_log off;
+        }
+    }
+}
+```
+
+## 9. 性能优化
+
+### 9.1 数据库优化
+```sql
+-- 创建索引优化查询性能
+CREATE INDEX idx_patients_family_id ON patients(family_id);
+CREATE INDEX idx_health_records_patient_date ON health_records(patient_id, visit_date DESC);
+CREATE INDEX idx_appointments_recorder_date ON appointments(recorder_id, scheduled_date);
+CREATE INDEX idx_subscriptions_status ON patient_subscriptions(status, end_date);
+CREATE INDEX idx_operation_logs_user_time ON operation_logs(user_id, created_at DESC);
+
+-- 分区表优化（可选，适用于大数据量）
+ALTER TABLE health_records 
+PARTITION BY RANGE (YEAR(visit_date)) (
+    PARTITION p2024 VALUES LESS THAN (2025),
+    PARTITION p2025 VALUES LESS THAN (2026),
+    PARTITION p_future VALUES LESS THAN MAXVALUE
+);
+```
+
+### 9.2 缓存策略
+```python
+# services/cache_service.py
+from functools import wraps
+from utils.helpers import cache_key, get_cache, set_cache
+import json
+
+def cached_result(cache_prefix, expire=3600):
+    """结果缓存装饰器"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 生成缓存键
+            key = cache_key(cache_prefix, *args, json.dumps(kwargs, sort_keys=True))
+            
+            # 尝试从缓存获取结果
+            cached_data = get_cache(key)
+            if cached_data is not None:
+                return cached_data
+            
+            # 执行函数并缓存结果
+            result = func(*args, **kwargs)
+            set_cache(key, result, expire)
+            
+            return result
+        return wrapper
+    return decorator
+
+# 使用示例
+@cached_result('family_detail', expire=300)  # 缓存5分钟
+def get_family_detail_cached(family_id, recorder_id):
+    return PatientService.get_family_detail(family_id, recorder_id)
+```
+
+## 10. 监控与日志
+
+### 10.1 应用监控配置
+```python
+# monitoring.py
+import logging
+import time
+from flask import request, g
+from functools import wraps
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+
+def monitor_performance(f):
+    """性能监控装饰器"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        start_time = time.time()
+        
+        try:
+            result = f(*args, **kwargs)
+            
+            # 记录性能指标
+            duration = time.time() - start_time
+            if duration > 1.0:  # 超过1秒的请求记录警告
+                logging.warning(f"慢查询: {request.endpoint} 耗时 {duration:.2f}s")
+            
+            return result
+        except Exception as e:
+            logging.error(f"请求异常: {request.endpoint} - {str(e)}")
+            raise
+        finally:
+            g.request_duration = time.time() - start_time
+    
+    return decorated_function
+
+# 请求中间件
+@app.before_request
+def before_request():
+    g.start_time = time.time()
+    g.request_id = str(uuid.uuid4())
+
+@app.after_request
+def after_request(response):
+    duration = time.time() - g.start_time
+    
+    # 记录访问日志
+    logging.info(f"请求完成: {request.method} {request.path} "
+                f"状态码: {response.status_code} 耗时: {duration:.3f}s "
+                f"请求ID: {g.request_id}")
+    
+    return response
+```
+
+### 10.2 健康检查接口
+```python
+# views/health.py
+from flask import Blueprint, jsonify
+from extensions import db
+import redis
+
+health_bp = Blueprint('health', __name__)
+
+@health_bp.route('/health', methods=['GET'])
+def health_check():
+    """健康检查接口"""
+    try:
+        # 检查数据库连接
+        db.session.execute('SELECT 1')
+        db_status = 'healthy'
+    except Exception:
+        db_status = 'unhealthy'
+    
+    try:
+        # 检查Redis连接
+        redis_client = redis.Redis.from_url(current_app.config['REDIS_URL'])
+        redis_client.ping()
+        redis_status = 'healthy'
+    except Exception:
+        redis_status = 'unhealthy'
+    
+    status = 'healthy' if db_status == 'healthy' and redis_status == 'healthy' else 'unhealthy'
+    status_code = 200 if status == 'healthy' else 503
+    
+    return jsonify({
+        'status': status,
+        'database': db_status,
+        'redis': redis_status,
+        'timestamp': datetime.utcnow().isoformat()
+    }), status_code
+```
+
+## 11. 安全配置
+
+### 11.1 安全中间件
+```python
+# security.py
+from flask import request, jsonify, current_app
+from functools import wraps
+import hashlib
+import hmac
+import time
+from extensions import cache
+
+class SecurityMiddleware:
+    def __init__(self, app=None):
+        self.app = app
+        if app is not None:
+            self.init_app(app)
+    
+    def init_app(self, app):
+        app.before_request(self.before_request)
+        app.after_request(self.after_request)
+    
+    def before_request(self):
+        # IP限流检查
+        if not self.check_rate_limit():
+            return jsonify({
+                'code': 429,
+                'message': '请求过于频繁，请稍后重试'
+            }), 429
+        
+        # SQL注入检查
+        if self.detect_sql_injection():
+            current_app.logger.warning(f"疑似SQL注入攻击: {request.remote_addr} - {request.url}")
+            return jsonify({
+                'code': 400,
+                'message': '请求参数异常'
+            }), 400
+    
+    def after_request(self, response):
+        # 添加安全头
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        
+        return response
+    
+    def check_rate_limit(self):
+        """检查请求频率限制"""
+        client_ip = request.remote_addr
+        cache_key = f"rate_limit:{client_ip}"
+        
+        # 获取当前请求数
+        current_requests = cache.get(cache_key) or 0
+        
+        # 每分钟最多100次请求
+        if current_requests >= 100:
+            return False
+        
+        # 增加请求计数
+        cache.set(cache_key, current_requests + 1, timeout=60)
+        return True
+    
+    def detect_sql_injection(self):
+        """检测SQL注入攻击"""
+        dangerous_patterns = [
+            r"(\b(union|select|insert|delete|update|drop|create|alter)\b)",
+            r"(--|\#|\/\*|\*\/)",
+            r"(\bor\b.*=.*\bor\b)",
+            r"(\band\b.*=.*\band\b)"
+        ]
+        
+        # 检查查询参数
+        query_string = request.query_string.decode().lower()
+        for pattern in dangerous_patterns:
+            if re.search(pattern, query_string, re.IGNORECASE):
+                return True
+        
+        # 检查POST数据
+        if request.is_json:
+            json_data = str(request.get_json()).lower()
+            for pattern in dangerous_patterns:
+                if re.search(pattern, json_data, re.IGNORECASE):
+                    return True
+        
+        return False
+
+def require_api_key(f):
+    """API密钥验证装饰器"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key')
+        
+        if not api_key:
+            return jsonify({
+                'code': 401,
+                'message': '缺少API密钥'
+            }), 401
+        
+        # 验证API密钥
+        expected_key = current_app.config.get('API_KEY')
+        if not hmac.compare_digest(api_key, expected_key):
+            return jsonify({
+                'code': 401,
+                'message': 'API密钥无效'
+            }), 401
+        
+        return f(*args, **kwargs)
+    return decorated_function
+```
+
+### 11.2 数据加密工具
+```python
+# utils/encryption.py
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import base64
+import os
+
+class DataEncryption:
+    def __init__(self, password=None):
+        if password is None:
+            password = os.environ.get('ENCRYPTION_KEY', 'default-key').encode()
+        
+        salt = b'stable_salt'  # 在生产环境中应该使用随机盐
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password))
+        self.cipher_suite = Fernet(key)
+    
+    def encrypt(self, data):
+        """加密数据"""
+        if isinstance(data, str):
+            data = data.encode()
+        encrypted_data = self.cipher_suite.encrypt(data)
+        return base64.urlsafe_b64encode(encrypted_data).decode()
+    
+    def decrypt(self, encrypted_data):
+        """解密数据"""
+        encrypted_data = base64.urlsafe_b64decode(encrypted_data.encode())
+        decrypted_data = self.cipher_suite.decrypt(encrypted_data)
+        return decrypted_data.decode()
+
+# 敏感字段加密装饰器
+def encrypt_field(encryption_key=None):
+    """敏感字段加密装饰器"""
+    def decorator(cls):
+        encryptor = DataEncryption(encryption_key)
+        
+        # 添加加密方法
+        def encrypt_sensitive_data(self, field_name, value):
+            if value:
+                return encryptor.encrypt(value)
+            return value
+        
+        def decrypt_sensitive_data(self, field_name, encrypted_value):
+            if encrypted_value:
+                try:
+                    return encryptor.decrypt(encrypted_value)
+                except Exception:
+                    return encrypted_value  # 如果解密失败，返回原值
+            return encrypted_value
+        
+        cls.encrypt_sensitive_data = encrypt_sensitive_data
+        cls.decrypt_sensitive_data = decrypt_sensitive_data
+        
+        return cls
+    return decorator
+```
+
+## 12. 测试配置
+
+### 12.1 单元测试示例
+```python
+# tests/test_patient_service.py
+import unittest
+from datetime import datetime, date
+from app import create_app
+from extensions import db
+from models.patient import Patient, Family
+from models.user import User, Recorder
+from services.patient_service import PatientService
+
+class TestPatientService(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app('testing')
+        self.app_context = self.app.app_context()
+        self.app_context.push()
+        
+        db.create_all()
+        
+        # 创建测试数据
+        self.create_test_data()
+    
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.app_context.pop()
+    
+    def create_test_data(self):
+        # 创建测试用户和记录员
+        user = User(
+            username='test_recorder',
+            phone='13800138000',
+            password_hash='hashed_password',
+            role='recorder',
+            name='测试记录员'
+        )
+        db.session.add(user)
+        db.session.flush()
+        
+        recorder = Recorder(
+            user_id=user.id,
+            employee_id='EMP001',
+            is_on_duty=True
+        )
+        db.session.add(recorder)
+        
+        # 创建测试家庭
+        family = Family(
+            family_name='测试家庭',
+            primary_address='北京市朝阳区测试路1号',
+            contact_phone='13800138001'
+        )
+        db.session.add(family)
+        db.session.flush()
+        
+        # 创建测试患者
+        patient = Patient(
+            family_id=family.id,
+            name='测试患者',
+            gender='male',
+            birth_date=date(1950, 1, 1),
+            relationship_to_head='户主'
+        )
+        db.session.add(patient)
+        
+        db.session.commit()
+        
+        self.recorder_id = recorder.id
+        self.family_id = family.id
+        self.patient_id = patient.id
+    
+    def test_get_recorder_families(self):
+        """测试获取记录员负责的家庭列表"""
+        # 创建患者订阅
+        from models.subscription import PatientSubscription, ServicePackage
+        
+        package = ServicePackage(
+            name='测试套餐',
+            price=100.00,
+            duration_days=30,
+            service_frequency=4
+        )
+        db.session.add(package)
+        db.session.flush()
+        
+        subscription = PatientSubscription(
+            patient_id=self.patient_id,
+            package_id=package.id,
+            recorder_id=self.recorder_id,
+            start_date=date.today(),
+            end_date=date(2024, 12, 31),
+            status='active'
+        )
+        db.session.add(subscription)
+        db.session.commit()
+        
+        # 测试获取家庭列表
+        result = PatientService.get_recorder_families(self.recorder_id)
+        
+        self.assertEqual(len(result['families']), 1)
+        self.assertEqual(result['families'][0]['family_name'], '测试家庭')
+        self.assertEqual(result['total'], 1)
+    
+    def test_get_family_detail(self):
+        """测试获取家庭详情"""
+        result = PatientService.get_family_detail(self.family_id, self.recorder_id)
+        
+        self.assertIsNotNone(result)
+        self.assertEqual(result['family_name'], '测试家庭')
+        self.assertEqual(len(result['patients']), 1)
+        self.assertEqual(result['patients'][0]['name'], '测试患者')
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+### 12.2 API测试示例
+```python
+# tests/test_api.py
+import json
+import unittest
+from app import create_app
+from extensions import db
+
+class TestAPI(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app('testing')
+        self.client = self.app.test_client()
+        self.app_context = self.app.app_context()
+        self.app_context.push()
+        
+        db.create_all()
+        self.create_test_user()
+    
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.app_context.pop()
+    
+    def create_test_user(self):
+        """创建测试用户"""
+        from models.user import User
+        from werkzeug.security import generate_password_hash
+        
+        user = User(
+            username='test_user',
+            phone='13800138000',
+            password_hash=generate_password_hash('password123'),
+            role='recorder',
+            name='测试用户'
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        self.test_user_id = user.id
+    
+    def get_auth_headers(self):
+        """获取认证头"""
+        response = self.client.post('/api/v1/auth/login', 
+                                  data=json.dumps({
+                                      'username': 'test_user',
+                                      'password': 'password123'
+                                  }),
+                                  content_type='application/json')
+        
+        data = json.loads(response.data)
+        token = data['data']['access_token']
+        
+        return {'Authorization': f'Bearer {token}'}
+    
+    def test_login(self):
+        """测试用户登录"""
+        response = self.client.post('/api/v1/auth/login',
+                                  data=json.dumps({
+                                      'username': 'test_user',
+                                      'password': 'password123'
+                                  }),
+                                  content_type='application/json')
+        
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data['code'], 200)
+        self.assertIn('access_token', data['data'])
+    
+    def test_get_families(self):
+        """测试获取家庭列表"""
+        headers = self.get_auth_headers()
+        
+        response = self.client.get('/api/v1/families',
+                                 headers=headers)
+        
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data['code'], 200)
+    
+    def test_unauthorized_access(self):
+        """测试未认证访问"""
+        response = self.client.get('/api/v1/families')
+        
+        self.assertEqual(response.status_code, 401)
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+## 13. 数据备份与恢复
+
+### 13.1 数据库备份脚本
+```python
+# scripts/backup.py
+import os
+import subprocess
+from datetime import datetime
+import logging
+
+class DatabaseBackup:
+    def __init__(self, config):
+        self.host = config.get('DB_HOST', 'localhost')
+        self.port = config.get('DB_PORT', '3306')
+        self.user = config.get('DB_USER', 'root')
+        self.password = config.get('DB_PASSWORD', '')
+        self.database = config.get('DB_NAME', 'recorder_db')
+        self.backup_dir = config.get('BACKUP_DIR', '/backups')
+        
+        # 创建备份目录
+        os.makedirs(self.backup_dir, exist_ok=True)
+    
+    def create_backup(self):
+        """创建数据库备份"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{self.backup_dir}/backup_{self.database}_{timestamp}.sql"
+        
+        # 构建mysqldump命令
+        cmd = [
+            'mysqldump',
+            f'--host={self.host}',
+            f'--port={self.port}',
+            f'--user={self.user}',
+            f'--password={self.password}',
+            '--single-transaction',
+            '--routines',
+            '--triggers',
+            self.database
+        ]
+        
+        try:
+            with open(backup_file, 'w') as f:
+                subprocess.run(cmd, stdout=f, check=True)
+            
+            logging.info(f"数据库备份成功: {backup_file}")
+            
+            # 压缩备份文件
+            self.compress_backup(backup_file)
+            
+            return backup_file
+        except subprocess.CalledProcessError as e:
+            logging.error(f"数据库备份失败: {e}")
+            return None
+    
+    def compress_backup(self, backup_file):
+        """压缩备份文件"""
+        try:
+            subprocess.run(['gzip', backup_file], check=True)
+            logging.info(f"备份文件压缩成功: {backup_file}.gz")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"备份文件压缩失败: {e}")
+    
+    def cleanup_old_backups(self, keep_days=7):
+        """清理旧的备份文件"""
+        import glob
+        import time
+        
+        pattern = os.path.join(self.backup_dir, 'backup_*.sql.gz')
+        backup_files = glob.glob(pattern)
+        
+        cutoff_time = time.time() - (keep_days * 24 * 60 * 60)
+        
+        for backup_file in backup_files:
+            if os.path.getctime(backup_file) < cutoff_time:
+                try:
+                    os.remove(backup_file)
+                    logging.info(f"删除旧备份文件: {backup_file}")
+                except Exception as e:
+                    logging.error(f"删除备份文件失败: {e}")
+
+# 使用Celery定时执行备份任务
+@celery.task
+def create_database_backup():
+    """数据库备份任务"""
+    config = {
+        'DB_HOST': os.environ.get('DB_HOST', 'localhost'),
+        'DB_PORT': os.environ.get('DB_PORT', '3306'),
+        'DB_USER': os.environ.get('DB_USER', 'root'),
+        'DB_PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'DB_NAME': os.environ.get('DB_NAME', 'recorder_db'),
+        'BACKUP_DIR': os.environ.get('BACKUP_DIR', '/backups')
+    }
+    
+    backup = DatabaseBackup(config)
+    backup_file = backup.create_backup()
+    
+    if backup_file:
+        # 清理旧备份
+        backup.cleanup_old_backups(keep_days=7)
+        
+        # 可以在这里添加备份文件上传到云存储的逻辑
+        # upload_to_cloud_storage(backup_file)
+        
+        logging.info("数据库备份任务完成")
+    else:
+        logging.error("数据库备份任务失败")
+```
+
+## 14. 配置管理
+
+### 14.1 环境配置文件
+```python
+# config/production.py
+import os
+
+class ProductionConfig:
+    # 应用配置
+    SECRET_KEY = os.environ.get('SECRET_KEY')
+    DEBUG = False
+    TESTING = False
+    
+    # 数据库配置
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_size': 10,
+        'pool_recycle': 120,
+        'pool_pre_ping': True
+    }
+    
+    # Redis配置
+    REDIS_URL = os.environ.get('REDIS_URL')
+    
+    # JWT配置
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY')
+    JWT_ACCESS_TOKEN_EXPIRES = 7200  # 2小时
+    JWT_REFRESH_TOKEN_EXPIRES = 2592000  # 30天
+    
+    # 文件上传配置
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', '/app/uploads')
+    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+    
+    # 云存储配置（阿里云OSS示例）
+    OSS_ACCESS_KEY_ID = os.environ.get('OSS_ACCESS_KEY_ID')
+    OSS_ACCESS_KEY_SECRET = os.environ.get('OSS_ACCESS_KEY_SECRET')
+    OSS_BUCKET_NAME = os.environ.get('OSS_BUCKET_NAME')
+    OSS_ENDPOINT = os.environ.get('OSS_ENDPOINT')
+    
+    # 缓存配置
+    CACHE_TYPE = 'redis'
+    CACHE_REDIS_URL = os.environ.get('REDIS_URL')
+    CACHE_DEFAULT_TIMEOUT = 300
+    
+    # Celery配置
+    CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL')
+    CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND')
+    
+    # 日志配置
+    LOG_LEVEL = 'INFO'
+    LOG_FILE = '/app/logs/app.log'
+    
+    # 安全配置
+    API_KEY = os.environ.get('API_KEY')
+    ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
+    
+    # 第三方服务配置
+    SMS_API_KEY = os.environ.get('SMS_API_KEY')  # 短信服务
+    PUSH_APP_KEY = os.environ.get('PUSH_APP_KEY')  # 推送服务
+    WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')  # 微信小程序
+    WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
+```
+
+### 14.2 启动脚本
+```python
+# run.py
+import os
+from app import create_app
+from extensions import db
+
+# 获取配置环境
+config_name = os.environ.get('FLASK_ENV', 'development')
+app = create_app(config_name)
+
+@app.cli.command()
+def init_db():
+    """初始化数据库"""
+    db.create_all()
+    print('数据库初始化完成')
+
+@app.cli.command()
+def create_admin():
+    """创建管理员用户"""
+    from models.user import User
+    from werkzeug.security import generate_password_hash
+    
+    username = input('请输入管理员用户名: ')
+    password = input('请输入管理员密码: ')
+    name = input('请输入管理员姓名: ')
+    phone = input('请输入管理员手机号: ')
+    
+    admin = User(
+        username=username,
+        phone=phone,
+        password_hash=generate_password_hash(password),
+        role='admin',
+        name=name
+    )
+    
+    db.session.add(admin)
+    db.session.commit()
+    
+    print(f'管理员用户 {username} 创建成功')
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+```
+
+### 14.3 requirements.txt
+```txt
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-Migrate==4.0.5
+Flask-JWT-Extended==4.5.2
+Flask-CORS==4.0.0
+Flask-Caching==2.1.0
+Flask-RESTX==1.2.0
+PyMySQL==1.1.0
+SQLAlchemy==2.0.21
+redis==5.0.1
+celery==5.3.4
+gunicorn==21.2.0
+Pillow==10.0.1
+cryptography==41.0.7
+python-dotenv==1.0.0
+marshmallow==3.20.1
+marshmallow-sqlalchemy==0.29.0
+alembic==1.12.1
+pytest==7.4.3
+pytest-flask==1.3.0
+coverage==7.3.2
+```
+
+## 15. 总结
+
+这份后端设计文档涵盖了记录员小程序的完整后端架构，包括：
+
+1. **完整的数据库设计**：包含用户管理、患者管理、预约系统、健康记录、医院预约等所有核心表结构
+2. **RESTful API设计**：提供了标准化的API接口设计和示例
+3. **Flask应用架构**：采用分层架构，包含模型层、服务层、视图层的清晰分离
+4. **安全措施**：包含认证授权、数据加密、防SQL注入、限流等安全机制
+5. **性能优化**：数据库索引、缓存策略、异步任务处理
+6. **监控与日志**：完整的应用监控和日志记录方案
+7. **部署配置**：Docker容器化部署和Nginx负载均衡配置
+8. **测试框架**：单元测试和API测试示例
+9. **数据备份**：自动化数据库备份和恢复方案
+10. **配置管理**：多环境配置和启动脚本
+
+这个设计可以满足记录员小程序的所有核心需求，具备良好的扩展性、安全性和可维护性。建议在实际开发中根据具体需求进行适当调整和优化。
