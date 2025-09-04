@@ -170,8 +170,18 @@ def get_family_detail(family_id):
 def update_family(family_id):
     """更新家庭信息"""
     try:
+        current_app.logger.info(f"进入update_family函数，family_id: {family_id}")
+        current_app.logger.info(f"请求头: {dict(request.headers)}")
+        
+        # 获取Authorization头
+        auth_header = request.headers.get('Authorization')
+        current_app.logger.info(f"Authorization头: {auth_header}")
+        
         data = request.get_json()
+        current_app.logger.info(f"请求数据: {data}")
+        
         if not data:
+            current_app.logger.error("请求数据为空")
             return jsonify({
                 'code': 422,
                 'message': '请求数据不能为空'
@@ -179,7 +189,10 @@ def update_family(family_id):
             
         # 获取当前用户ID并验证
         current_user_identity = get_jwt_identity()
+        current_app.logger.info(f"JWT identity: {current_user_identity}")
+        
         if not current_user_identity:
+            current_app.logger.error("JWT token无效 - current_user_identity为空")
             return jsonify({
                 'code': 422,
                 'message': 'JWT token无效'
@@ -187,28 +200,35 @@ def update_family(family_id):
             
         try:
             recorder_id = int(current_user_identity)
-        except (ValueError, TypeError):
+            current_app.logger.info(f"转换后的recorder_id: {recorder_id}")
+        except (ValueError, TypeError) as e:
+            current_app.logger.error(f"用户ID格式错误: {current_user_identity}, 错误: {str(e)}")
             return jsonify({
                 'code': 422,
                 'message': '用户ID格式错误'
             }), 422
         
         # 验证请求数据
+        current_app.logger.info("开始验证请求数据")
         validation_error = validate_family_data(data, is_update=True)
         if validation_error:
+            current_app.logger.error(f"数据验证失败: {validation_error}")
             return jsonify({
                 'code': 422,
                 'message': validation_error
             }), 422
         
+        current_app.logger.info("数据验证通过，调用FamilyService.update_family")
         family = FamilyService.update_family(family_id, data, recorder_id)
         
         if not family:
+            current_app.logger.error(f"家庭不存在或无权限访问，family_id: {family_id}, recorder_id: {recorder_id}")
             return jsonify({
                 'code': 404,
                 'message': '家庭不存在或无权限访问'
             }), 404
         
+        current_app.logger.info(f"家庭信息更新成功，family_id: {family_id}")
         return jsonify({
             'code': 200,
             'message': '家庭信息更新成功',
@@ -216,7 +236,7 @@ def update_family(family_id):
         })
         
     except Exception as e:
-        current_app.logger.error(f"更新家庭信息失败: {str(e)}")
+        current_app.logger.error(f"更新家庭信息失败: {str(e)}", exc_info=True)
         return jsonify({
             'code': 500,
             'message': f'服务器内部错误: {str(e)}'

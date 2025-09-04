@@ -150,37 +150,53 @@ class FamilyService:
     def update_family(family_id, data, recorder_id=None):
         """更新家庭信息"""
         try:
+            current_app.logger.info(f"FamilyService.update_family - 参数: family_id={family_id}, recorder_id={recorder_id}, data={data}")
+            
             query = db.session.query(Family).filter(Family.id == family_id)
+            current_app.logger.info("FamilyService.update_family - 创建基础查询")
             
             # 如果指定了recorder_id，验证权限
             if recorder_id:
+                current_app.logger.info(f"FamilyService.update_family - 添加recorder_id过滤: {recorder_id}")
                 query = query.join(Patient)\
                     .join(PatientSubscription)\
                     .filter(PatientSubscription.recorder_id == recorder_id)
             
             family = query.first()
+            current_app.logger.info(f"FamilyService.update_family - 查询到的家庭: {family}")
+            
             if not family:
+                current_app.logger.error(f"FamilyService.update_family - 家庭不存在或无权限, family_id={family_id}")
                 return None
+            
+            current_app.logger.info(f"FamilyService.update_family - 更新前家庭信息: householdHead={family.householdHead}, address={family.address}, phone={family.phone}")
             
             # 更新家庭基本信息
             if 'householdHead' in data:
+                current_app.logger.info(f"更新householdHead: {family.householdHead} -> {data['householdHead']}")
                 family.householdHead = data['householdHead']
             if 'address' in data:
+                current_app.logger.info(f"更新address: {family.address} -> {data['address']}")
                 family.address = data['address']
             if 'phone' in data:
+                current_app.logger.info(f"更新phone: {family.phone} -> {data['phone']}")
                 family.phone = data['phone']
             if 'emergency_contact' in data:
+                current_app.logger.info(f"更新emergency_contact: {family.emergency_contact} -> {data['emergency_contact']}")
                 family.emergency_contact = data['emergency_contact']
             if 'emergency_phone' in data:
+                current_app.logger.info(f"更新emergency_phone: {family.emergency_phone} -> {data['emergency_phone']}")
                 family.emergency_phone = data['emergency_phone']
             
             # 更新家庭成员（如果提供了members数据）
             if 'members' in data:
+                current_app.logger.info("FamilyService.update_family - 更新家庭成员")
                 # 删除现有成员（级联删除会自动处理关联数据）
                 Patient.query.filter(Patient.family_id == family_id).delete()
                 
                 # 创建新的成员记录
-                for member_data in data['members']:
+                for i, member_data in enumerate(data['members']):
+                    current_app.logger.info(f"创建第{i+1}个成员: {member_data}")
                     patient = Patient(
                         family_id=family.id,
                         name=member_data['name'],
@@ -203,10 +219,14 @@ class FamilyService:
                     db.session.add(patient)
             
             family.updated_at = datetime.utcnow()
+            current_app.logger.info("FamilyService.update_family - 提交数据库更改")
             db.session.commit()
+            
+            current_app.logger.info(f"FamilyService.update_family - 更新后家庭信息: householdHead={family.householdHead}, address={family.address}, phone={family.phone}")
             return family
             
         except Exception as e:
+            current_app.logger.error(f"FamilyService.update_family - 发生异常: {str(e)}", exc_info=True)
             db.session.rollback()
             raise e
     
@@ -355,6 +375,9 @@ class FamilyService:
             family_member_count = Patient.query.filter(Patient.family_id == family_id).count()
             if family_member_count <= 1:
                 raise ValueError("不能删除家庭的最后一个成员")
+            
+            # 先删除相关的PatientSubscription记录
+            PatientSubscription.query.filter(PatientSubscription.patient_id == member_id).delete()
             
             db.session.delete(patient)
             
