@@ -8,9 +8,13 @@ def recorder_required(f):
     """记录员权限装饰器"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        current_app.logger.info(f"recorder_required - 进入装饰器，函数名: {f.__name__}")
+        
         current_user_id = get_jwt_identity()
+        current_app.logger.info(f"recorder_required - JWT identity: {current_user_id}")
         
         if not current_user_id:
+            current_app.logger.error("recorder_required - JWT token无效")
             return jsonify({
                 'code': 422,
                 'message': 'JWT token无效'
@@ -18,20 +22,25 @@ def recorder_required(f):
             
         try:
             user_id = int(current_user_id)
+            current_app.logger.info(f"recorder_required - 转换后的user_id: {user_id}")
         except (ValueError, TypeError) as e:
+            current_app.logger.error(f"recorder_required - 用户ID格式错误: {current_user_id}, 错误: {str(e)}")
             return jsonify({
                 'code': 422,
                 'message': '用户ID格式错误'
             }), 422
             
         user = db.session.query(User).filter(User.id == user_id).first()
+        current_app.logger.info(f"recorder_required - 查询到的用户: {user.name if user else None}, 角色: {user.role if user else 'None'}")
         
         if not user or user.role != 'recorder':
+            current_app.logger.error(f"recorder_required - 权限不足，用户角色: {user.role if user else 'None'}")
             return jsonify({
                 'code': 403,
                 'message': '权限不足，需要记录员权限'
             }), 403
         
+        current_app.logger.info("recorder_required - 权限验证通过")
         return f(*args, **kwargs)
     return decorated_function
 

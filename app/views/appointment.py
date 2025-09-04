@@ -80,34 +80,33 @@ def get_appointments():
 def create_appointment():
     """创建预约"""
     try:
+        current_app.logger.info("appointment.create_appointment - 开始创建预约")
         recorder_id = int(get_jwt_identity())
         data = request.get_json()
+        
+        current_app.logger.info(f"appointment.create_appointment - 请求数据: {data}")
         
         # 验证数据
         validation_error = validate_appointment(data)
         if validation_error:
+            current_app.logger.warning(f"appointment.create_appointment - 数据验证失败: {validation_error}")
             return jsonify({
-                'code': 400,
+                'code': 422,
                 'message': validation_error
-            }), 400
+            }), 422
         
-        # 添加记录员ID
-        data['recorder_id'] = recorder_id
-        
-        appointment = AppointmentService.create_appointment(data)
+        appointment = AppointmentService.create_appointment(data, recorder_id)
         
         return jsonify({
             'code': 200,
             'message': '预约创建成功',
-            'data': {
-                'appointment_id': appointment.id
-            }
+            'data': appointment.to_dict(include_patient=True, include_payment=True)
         })
     except Exception as e:
-        current_app.logger.error(f"创建预约失败: {str(e)}")
+        current_app.logger.error(f"appointment.create_appointment - 创建预约失败: {str(e)}", exc_info=True)
         return jsonify({
             'code': 500,
-            'message': '服务器内部错误'
+            'message': f'服务器内部错误: {str(e)}'
         }), 500
 
 @appointment_bp.route('/appointments/<int:appointment_id>', methods=['PUT'])
@@ -116,12 +115,15 @@ def create_appointment():
 def update_appointment(appointment_id):
     """更新预约"""
     try:
+        current_app.logger.info(f"appointment.update_appointment - 更新预约: {appointment_id}")
         recorder_id = int(get_jwt_identity())
         data = request.get_json()
         
-        appointment = AppointmentService.update_appointment(appointment_id, recorder_id, data)
+        current_app.logger.info(f"appointment.update_appointment - 更新数据: {data}")
         
-        if not appointment:
+        appointment = AppointmentService.update_appointment(appointment_id, data, recorder_id)
+        
+        if appointment is None:
             return jsonify({
                 'code': 404,
                 'message': '预约不存在或无权限访问'
@@ -130,13 +132,13 @@ def update_appointment(appointment_id):
         return jsonify({
             'code': 200,
             'message': '预约更新成功',
-            'data': appointment.to_dict()
+            'data': appointment.to_dict(include_patient=True, include_payment=True)
         })
     except Exception as e:
-        current_app.logger.error(f"更新预约失败: {str(e)}")
+        current_app.logger.error(f"appointment.update_appointment - 更新预约失败: {str(e)}", exc_info=True)
         return jsonify({
             'code': 500,
-            'message': '服务器内部错误'
+            'message': f'服务器内部错误: {str(e)}'
         }), 500
 
 @appointment_bp.route('/appointments/<int:appointment_id>/complete', methods=['POST'])
@@ -165,4 +167,83 @@ def complete_appointment(appointment_id):
         return jsonify({
             'code': 500,
             'message': '服务器内部错误'
+        }), 500
+
+@appointment_bp.route('/appointments/<int:appointment_id>', methods=['GET'])
+@jwt_required()
+@recorder_required
+def get_appointment_detail(appointment_id):
+    """获取预约详情"""
+    try:
+        current_app.logger.info(f"appointment.get_appointment_detail - 获取预约详情: {appointment_id}")
+        recorder_id = int(get_jwt_identity())
+        
+        appointment = AppointmentService.get_appointment_by_id(appointment_id, recorder_id)
+        
+        if not appointment:
+            return jsonify({
+                'code': 404,
+                'message': '预约不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '获取成功',
+            'data': appointment
+        })
+    except Exception as e:
+        current_app.logger.error(f"appointment.get_appointment_detail - 获取预约详情失败: {str(e)}", exc_info=True)
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+@appointment_bp.route('/appointments/<int:appointment_id>', methods=['DELETE'])
+@jwt_required()
+@recorder_required
+def delete_appointment(appointment_id):
+    """删除预约"""
+    try:
+        current_app.logger.info(f"appointment.delete_appointment - 删除预约: {appointment_id}")
+        recorder_id = int(get_jwt_identity())
+        
+        result = AppointmentService.delete_appointment(appointment_id, recorder_id)
+        
+        if not result:
+            return jsonify({
+                'code': 404,
+                'message': '预约不存在或无权限访问'
+            }), 404
+        
+        return jsonify({
+            'code': 200,
+            'message': '预约删除成功'
+        })
+    except Exception as e:
+        current_app.logger.error(f"appointment.delete_appointment - 删除预约失败: {str(e)}", exc_info=True)
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
+
+@appointment_bp.route('/service-types', methods=['GET'])
+@jwt_required()
+@recorder_required
+def get_service_types():
+    """获取所有服务类型"""
+    try:
+        current_app.logger.info("appointment.get_service_types - 获取所有服务类型")
+        
+        service_types = AppointmentService.get_service_types()
+        
+        return jsonify({
+            'code': 200,
+            'message': '获取成功',
+            'data': service_types
+        })
+    except Exception as e:
+        current_app.logger.error(f"appointment.get_service_types - 获取服务类型失败: {str(e)}", exc_info=True)
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
         }), 500
