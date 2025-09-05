@@ -71,11 +71,13 @@ def create_app(config_name='default'):
     from app.views.appointment import appointment_bp
     from app.views.hospital import hospital_bp
     from app.views.health import health_bp
+    from app.views.service_package import service_package_bp
     
     app.register_blueprint(auth_bp)
     app.register_blueprint(patient_bp)
     app.register_blueprint(appointment_bp)
     app.register_blueprint(hospital_bp)
     app.register_blueprint(health_bp)
+    app.register_blueprint(service_package_bp)
     
     return app

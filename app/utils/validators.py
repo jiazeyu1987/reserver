@@ -83,9 +83,13 @@ def validate_patient_data(data, is_update=False, is_member=False):
     
     # 验证套餐类型
     if 'packageType' in data and data['packageType']:
-        valid_packages = ['基础套餐', '标准套餐', 'VIP套餐']
-        if data['packageType'] not in valid_packages:
-            return f'套餐类型必须是: {", ".join(valid_packages)}'
+        from app.models.appointment import ServicePackage
+        valid_packages = [pkg.name for pkg in ServicePackage.query.filter_by(is_active=True).all()]
+        if not valid_packages:
+            # 如果数据库中没有套餐，则跳过验证
+            pass
+        elif data['packageType'] not in valid_packages:
+            return f'套餐类型必须是以下之一: {", ".join(valid_packages[:5])}{"..." if len(valid_packages) > 5 else ""}'
     
     # 验证支付状态
     if 'paymentStatus' in data and data['paymentStatus']:

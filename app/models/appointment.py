@@ -5,19 +5,34 @@ class ServicePackage(db.Model):
     __tablename__ = 'service_packages'
     
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text)
-    price = db.Column(db.Numeric(10,2), nullable=False)
+    name = db.Column(db.String(100), nullable=False)  # 套餐名称（如：贴心关怀型）
+    description = db.Column(db.Text)  # 套餐描述
+    price = db.Column(db.Numeric(10,2), nullable=False)  # 月费价格
     duration_days = db.Column(db.Integer, nullable=False)  # 套餐时长（天）
     service_frequency = db.Column(db.Integer, nullable=False)  # 服务频率（次/月）
     service_items = db.Column(db.Text)  # JSON格式存储服务项目
+    
+    # 新增字段用于10级套餐
+    target_users = db.Column(db.Text)  # 目标用户群体描述
+    staff_level = db.Column(db.String(50))  # 服务人员等级（护理员/护士/主管护师/专家）
+    hospital_level = db.Column(db.String(100))  # 合作医院等级
+    service_time = db.Column(db.String(200))  # 服务时间描述
+    service_content = db.Column(db.Text)  # 详细服务内容（JSON格式）
+    additional_services = db.Column(db.Text)  # 增值服务（JSON格式）
+    monitoring_items = db.Column(db.Text)  # 健康监测项目（JSON格式）
+    report_frequency = db.Column(db.String(50))  # 报告频率
+    gifts_included = db.Column(db.Text)  # 包含的礼品（JSON格式）
+    
+    package_level = db.Column(db.Integer, nullable=False)  # 套餐等级（1-10）
     is_active = db.Column(db.Boolean, default=True)
+    is_system_default = db.Column(db.Boolean, default=False)  # 是否为系统默认套餐
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # 关系
     subscriptions = db.relationship('PatientSubscription', backref='package')
     
     def to_dict(self):
+        import json
         return {
             'id': self.id,
             'name': self.name,
@@ -25,7 +40,18 @@ class ServicePackage(db.Model):
             'price': float(self.price),
             'duration_days': self.duration_days,
             'service_frequency': self.service_frequency,
+            'target_users': self.target_users,
+            'staff_level': self.staff_level,
+            'hospital_level': self.hospital_level,
+            'service_time': self.service_time,
+            'service_content': json.loads(self.service_content) if self.service_content else [],
+            'additional_services': json.loads(self.additional_services) if self.additional_services else [],
+            'monitoring_items': json.loads(self.monitoring_items) if self.monitoring_items else [],
+            'report_frequency': self.report_frequency,
+            'gifts_included': json.loads(self.gifts_included) if self.gifts_included else [],
+            'package_level': self.package_level,
             'is_active': self.is_active,
+            'is_system_default': self.is_system_default,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
