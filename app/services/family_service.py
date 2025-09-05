@@ -24,8 +24,61 @@ class FamilyService:
             db.session.add(family)
             db.session.flush()  # 获取family.id
             
-            # 创建家庭成员
-            for member_data in data['members']:
+            # 首先创建户主患者记录（户主信息独立管理）
+            household_patient = Patient(
+                family_id=family.id,
+                name=data['householdHead'],
+                age=int(data['householdHeadAge']),
+                gender=data['householdHeadGender'],
+                relationship='户主',
+                conditions=data.get('householdHeadConditions', ''),
+                packageType=data['householdHeadPackageType'],
+                paymentStatus='normal',
+                phone=data['phone'],  # 户主使用家庭电话
+                medications=data.get('householdHeadMedications', '')
+            )
+            
+            db.session.add(household_patient)
+            db.session.flush()  # 获取patient.id
+            
+            # 为户主创建PatientSubscription记录
+            if recorder_id:
+                from app.models.appointment import ServicePackage, PatientSubscription
+                
+                # 查找对应的服务套餐
+                package = ServicePackage.query.filter_by(name=household_patient.packageType).first()
+                if not package:
+                    # 如果套餐不存在，创建一个默认套餐
+                    package = ServicePackage(
+                        name=household_patient.packageType,
+                        price=0.00,
+                        duration_days=30,
+                        service_frequency=4,
+                        description=f'默认{household_patient.packageType}',
+                        package_level=1,  # 设置默认等级
+                        is_active=True,
+                        is_system_default=False
+                    )
+                    db.session.add(package)
+                    db.session.flush()
+                
+                # 创建户主的订阅记录
+                from datetime import timedelta
+                start_date = datetime.now().date()
+                end_date = start_date + timedelta(days=package.duration_days)
+                
+                subscription = PatientSubscription(
+                    patient_id=household_patient.id,
+                    package_id=package.id,
+                    recorder_id=recorder_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    status='active'
+                )
+                db.session.add(subscription)
+            
+            # 创建其他家庭成员（不包含套餐类型）
+            for member_data in data.get('members', []):
                 patient = Patient(
                     family_id=family.id,
                     name=member_data['name'],
@@ -33,7 +86,7 @@ class FamilyService:
                     gender=member_data['gender'],
                     relationship=member_data['relationship'],
                     conditions=member_data.get('conditions', ''),
-                    packageType=member_data.get('packageType', '基础套餐'),
+                    packageType='',  # 成员不设置套餐类型
                     paymentStatus='normal',
                     phone=member_data.get('phone'),
                     medications=member_data.get('medications', '')
@@ -48,40 +101,7 @@ class FamilyService:
                     patient.set_medications_list(member_data['medications'])
                 
                 db.session.add(patient)
-                db.session.flush()  # 获取patient.id
-                
-                # 创建PatientSubscription记录（如果提供了recorder_id）
-                if recorder_id:
-                    from app.models.appointment import ServicePackage, PatientSubscription
-                    
-                    # 查找对应的服务套餐
-                    package = ServicePackage.query.filter_by(name=patient.packageType).first()
-                    if not package:
-                        # 如果套餐不存在，创建一个默认套餐
-                        package = ServicePackage(
-                            name=patient.packageType,
-                            price=0.00,
-                            duration_days=30,
-                            service_frequency=4,
-                            description=f'默认{patient.packageType}'
-                        )
-                        db.session.add(package)
-                        db.session.flush()
-                    
-                    # 创建患者订阅记录
-                    from datetime import timedelta
-                    start_date = datetime.now().date()
-                    end_date = start_date + timedelta(days=package.duration_days)
-                    
-                    subscription = PatientSubscription(
-                        patient_id=patient.id,
-                        package_id=package.id,
-                        recorder_id=recorder_id,
-                        start_date=start_date,
-                        end_date=end_date,
-                        status='active'
-                    )
-                    db.session.add(subscription)
+                # 注意：普通成员不创建PatientSubscription记录，因为只有户主有套餐
                 
             db.session.commit()
             return family

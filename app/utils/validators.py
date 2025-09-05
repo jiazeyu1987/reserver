@@ -31,26 +31,44 @@ def validate_family_data(data, is_update=False):
     if not data:
         return '请求数据不能为空'
     
-    # 创建时的必填字段（移除phone，允许手机号为空）
+    # 创建时的必填字段
     if not is_update:
-        required_fields = ['householdHead', 'address', 'members']
+        # 户主基本信息必填字段
+        required_household_fields = ['householdHead', 'householdHeadAge', 'householdHeadGender', 
+                                   'householdHeadPackageType', 'address']
         
-        for field in required_fields:
+        for field in required_household_fields:
             if field not in data or not data[field]:
-                return f'缺少必填字段: {field}'
+                return f'缺少户主信息必填字段: {field}'
         
-        # 验证家庭成员数据
+        # 验证户主年龄
+        try:
+            age = int(data['householdHeadAge'])
+            if age < 0 or age > 150:
+                return '户主年龄应在0-150之间'
+        except (ValueError, TypeError):
+            return '户主年龄必须是数字'
+        
+        # 验证户主性别
+        if data['householdHeadGender'] not in ['男', '女']:
+            return '户主性别只能是"男"或"女"'
+        
+        # 验证户主套餐类型
+        if data['householdHeadPackageType']:
+            from app.models.appointment import ServicePackage
+            valid_packages = [pkg.name for pkg in ServicePackage.query.filter_by(is_active=True).all()]
+            if valid_packages and data['householdHeadPackageType'] not in valid_packages:
+                return f'户主套餐类型必须是以下之一: {", ".join(valid_packages[:5])}'
+        
+        # 验证家庭成员数据（现在可以为空，因为户主不在members中）
         members = data.get('members', [])
-        if not isinstance(members, list) or len(members) == 0:
-            return '至少需要一个家庭成员'
+        if not isinstance(members, list):
+            return 'members字段必须是数组类型'
         
         for i, member in enumerate(members):
             member_error = validate_patient_data(member, is_member=True)
             if member_error:
                 return f'第{i+1}个成员数据错误: {member_error}'
-    
-    # 手机号字段可以为空，不进行格式验证
-    # 如果需要验证手机号格式，可以在这里添加，但现在跳过所有验证
     
     return None
 
@@ -81,15 +99,8 @@ def validate_patient_data(data, is_update=False, is_member=False):
         if data['gender'] not in ['男', '女']:
             return '性别只能是"男"或"女"'
     
-    # 验证套餐类型
-    if 'packageType' in data and data['packageType']:
-        from app.models.appointment import ServicePackage
-        valid_packages = [pkg.name for pkg in ServicePackage.query.filter_by(is_active=True).all()]
-        if not valid_packages:
-            # 如果数据库中没有套餐，则跳过验证
-            pass
-        elif data['packageType'] not in valid_packages:
-            return f'套餐类型必须是以下之一: {", ".join(valid_packages[:5])}{"..." if len(valid_packages) > 5 else ""}'
+    # 家庭成员不需要验证套餐类型（只有户主有套餐类型）
+    # 套餐类型验证已移至户主信息验证中
     
     # 验证支付状态
     if 'paymentStatus' in data and data['paymentStatus']:
