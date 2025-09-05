@@ -202,6 +202,7 @@ class AppointmentService:
             if 'appointment_type' in data:
                 appointment.appointment_type = data['appointment_type']
             if 'status' in data:
+                current_app.logger.info(f"🔄 AppointmentService.update_appointment - 状态更新：{appointment.status} -> {data['status']}")
                 appointment.status = data['status']
             if 'notes' in data:
                 appointment.notes = data['notes']
@@ -274,6 +275,37 @@ class AppointmentService:
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f"AppointmentService.delete_appointment - 删除预约失败: {str(e)}", exc_info=True)
+            raise e
+    
+    @staticmethod
+    def complete_appointment(appointment_id, recorder_id=None):
+        """完成预约"""
+        try:
+            current_app.logger.info(f"🎯 AppointmentService.complete_appointment - 完成预约，ID: {appointment_id}, 记录员: {recorder_id}")
+            
+            query = db.session.query(Appointment).filter(Appointment.id == appointment_id)
+            
+            # 如果指定了recorder_id，验证权限
+            if recorder_id:
+                query = query.filter(Appointment.recorder_id == recorder_id)
+            
+            appointment = query.first()
+            if not appointment:
+                current_app.logger.warning(f"AppointmentService.complete_appointment - 预约不存在或无权限，ID: {appointment_id}")
+                return None
+            
+            # 更新预约状态为已完成
+            current_app.logger.info(f"🎯 AppointmentService.complete_appointment - 状态更新：{appointment.status} -> completed")
+            appointment.status = 'completed'
+            appointment.updated_at = datetime.utcnow()
+            
+            db.session.commit()
+            current_app.logger.info(f"🎯 AppointmentService.complete_appointment - 预约完成成功，ID: {appointment.id}")
+            
+            return appointment
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"AppointmentService.complete_appointment - 完成预约失败: {str(e)}", exc_info=True)
             raise e
     
     @staticmethod
