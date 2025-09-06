@@ -523,3 +523,52 @@ def create_health_record():
             'code': 500,
             'message': '服务器内部错误'
         }), 500
+
+# ========== 测试函数：随机选择家庭 ==========
+
+@patient_bp.route('/families/random', methods=['GET'])
+@jwt_required()
+@recorder_required
+def get_random_family():
+    """随机选择一个家庭用于测试"""
+    try:
+        import random
+        
+        current_app.logger.info("🎲 测试函数：开始随机选择家庭")
+        recorder_id = int(get_jwt_identity())
+        
+        # 获取记录员的所有家庭
+        families = FamilyService.get_families(recorder_id)
+        
+        if not families:
+            return jsonify({
+                'code': 404,
+                'message': '没有可用的家庭数据'
+            }), 404
+        
+        # 随机选择一个家庭
+        random_family = random.choice(families)
+        current_app.logger.info(f"🎲 随机选中家庭ID: {random_family['id']}, 户主: {random_family['household_head']}")
+        
+        # 获取家庭详细信息，包括成员
+        family_detail = FamilyService.get_family_by_id(random_family['id'], recorder_id)
+        
+        if not family_detail:
+            return jsonify({
+                'code': 404,
+                'message': '获取家庭详情失败'
+            }), 404
+        
+        current_app.logger.info(f"🎲 家庭详情获取成功，成员数量: {len(family_detail.get('members', []))}")
+        
+        return jsonify({
+            'code': 200,
+            'message': '随机选择家庭成功',
+            'data': family_detail
+        })
+    except Exception as e:
+        current_app.logger.error(f"随机选择家庭失败: {str(e)}", exc_info=True)
+        return jsonify({
+            'code': 500,
+            'message': f'服务器内部错误: {str(e)}'
+        }), 500
