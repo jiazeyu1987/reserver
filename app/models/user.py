@@ -17,6 +17,11 @@ class User(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = db.Column(db.DateTime)
     
+    # 注册功能新增字段
+    email = db.Column(db.String(255), unique=True, nullable=True)  # 邮箱
+    id_card = db.Column(db.String(20), unique=True, nullable=True)  # 身份证号
+    address = db.Column(db.Text, nullable=True)  # 联系地址
+    
     # 关系
     recorder = db.relationship('Recorder', backref='user', uselist=False, cascade='all, delete-orphan')
     doctor = db.relationship('Doctor', backref='user', uselist=False, cascade='all, delete-orphan')
@@ -32,6 +37,10 @@ class User(db.Model):
             'id': self.id,
             'username': self.username,
             'name': self.name,
+            'phone': self.phone,
+            'email': self.email,
+            'id_card': self.id_card,
+            'address': self.address,
             'role': self.role,
             'avatar': self.avatar,
             'status': self.status,

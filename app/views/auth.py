@@ -96,3 +96,159 @@ def login():
             'code': 500,
             'message': '服务器内部错误'
         }), 500
+
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    """用户注册"""
+    try:
+        current_app.logger.info("=== 开始注册请求 ===")
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'code': 400,
+                'message': '请求数据无效'
+            }), 400
+        
+        # 获取必填字段
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        confirm_password = data.get('confirmPassword', '').strip()
+        email = data.get('email', '').strip()
+        phone = data.get('phone', '').strip()
+        id_card = data.get('idCard', '').strip()
+        address = data.get('address', '').strip()
+        name = data.get('name', '').strip()
+        
+        current_app.logger.info(f"注册数据: username='{username}', email='{email}', phone='{phone}', name='{name}'")
+        
+        # 验证必填字段
+        required_fields = {
+            'username': username,
+            'password': password,
+            'confirmPassword': confirm_password,
+            'email': email,
+            'phone': phone,
+            'idCard': id_card,
+            'address': address,
+            'name': name
+        }
+        
+        missing_fields = [field for field, value in required_fields.items() if not value]
+        if missing_fields:
+            return jsonify({
+                'code': 400,
+                'message': f'缺少必填字段: {", ".join(missing_fields)}'
+            }), 400
+        
+        # 验证密码一致性
+        if password != confirm_password:
+            return jsonify({
+                'code': 400,
+                'message': '两次输入的密码不一致'
+            }), 400
+        
+        # 验证密码强度
+        if len(password) < 6:
+            return jsonify({
+                'code': 400,
+                'message': '密码长度不能少于6位'
+            }), 400
+        
+        # 验证邮箱格式
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            return jsonify({
+                'code': 400,
+                'message': '邮箱格式不正确'
+            }), 400
+        
+        # 验证手机号格式
+        phone_pattern = r'^1[3-9]\d{9}$'
+        if not re.match(phone_pattern, phone):
+            return jsonify({
+                'code': 400,
+                'message': '手机号格式不正确'
+            }), 400
+        
+        # 验证身份证号格式
+        id_card_pattern = r'^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[0-9Xx]$'
+        if not re.match(id_card_pattern, id_card):
+            return jsonify({
+                'code': 400,
+                'message': '身份证号格式不正确'
+            }), 400
+        
+        # 检查用户名是否已存在
+        existing_user = db.session.query(User).filter_by(username=username).first()
+        if existing_user:
+            return jsonify({
+                'code': 400,
+                'message': '用户名已存在'
+            }), 400
+        
+        # 检查邮箱是否已存在
+        existing_email = db.session.query(User).filter_by(email=email).first()
+        if existing_email:
+            return jsonify({
+                'code': 400,
+                'message': '邮箱已被注册'
+            }), 400
+        
+        # 检查手机号是否已存在
+        existing_phone = db.session.query(User).filter_by(phone=phone).first()
+        if existing_phone:
+            return jsonify({
+                'code': 400,
+                'message': '手机号已被注册'
+            }), 400
+        
+        # 检查身份证号是否已存在
+        existing_id_card = db.session.query(User).filter_by(id_card=id_card).first()
+        if existing_id_card:
+            return jsonify({
+                'code': 400,
+                'message': '身份证号已被注册'
+            }), 400
+        
+        # 创建新用户
+        new_user = User(
+            username=username,
+            name=name,
+            phone=phone,
+            email=email,
+            id_card=id_card,
+            address=address,
+            role='recorder',  # 默认注册为记录员角色
+            status='active'
+        )
+        new_user.set_password(password)
+        
+        # 保存到数据库
+        db.session.add(new_user)
+        db.session.commit()
+        
+        current_app.logger.info(f"用户注册成功: id={new_user.id}, username='{new_user.username}'")
+        
+        # 创建访问令牌和刷新令牌
+        access_token = create_access_token(identity=str(new_user.id))
+        refresh_token = create_refresh_token(identity=str(new_user.id))
+        
+        current_app.logger.info("=== 注册成功 ===")
+        return jsonify({
+            'code': 200,
+            'message': '注册成功',
+            'data': {
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+                'user': new_user.to_dict()
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"注册过程中发生异常: {str(e)}", exc_info=True)
+        return jsonify({
+            'code': 500,
+            'message': '服务器内部错误'
+        }), 500
